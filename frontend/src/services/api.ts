@@ -129,7 +129,12 @@ export const modelsApi = {
     },
 
     list: async (projectId: string) => {
-        const response = await api.get(`/projects/${projectId}/models`);
+        const response = await api.get(`/models/project/${projectId}`);
+        return response.data;
+    },
+
+    delete: async (modelId: string) => {
+        const response = await api.delete(`/models/${modelId}`);
         return response.data;
     },
 };
@@ -149,7 +154,12 @@ export const datasetsApi = {
     },
 
     list: async (projectId: string) => {
-        const response = await api.get(`/projects/${projectId}/datasets`);
+        const response = await api.get(`/datasets/project/${projectId}`);
+        return response.data;
+    },
+
+    delete: async (datasetId: string) => {
+        const response = await api.delete(`/datasets/${datasetId}`);
         return response.data;
     },
 };

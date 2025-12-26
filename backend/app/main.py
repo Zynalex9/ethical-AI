@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
 from app.database import init_db, close_db
-from app.routers import auth
+from app.routers import auth, projects, models, datasets, validation
 
 
 @asynccontextmanager
@@ -93,6 +93,10 @@ async def general_exception_handler(
 
 # Register routers
 app.include_router(auth.router, prefix=settings.api_prefix)
+app.include_router(projects.router, prefix=settings.api_prefix)
+app.include_router(models.router, prefix=settings.api_prefix)
+app.include_router(datasets.router, prefix=settings.api_prefix)
+app.include_router(validation.router, prefix=settings.api_prefix)
 
 
 # Health check endpoint

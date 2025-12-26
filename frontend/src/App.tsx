@@ -1,6 +1,5 @@
 // Main App component with routing
 
-import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
 import { CssBaseline, CircularProgress, Box } from '@mui/material';
@@ -13,6 +12,9 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
+import ProjectsPage from './pages/ProjectsPage';
+import ProjectDetailPage from './pages/ProjectDetailPage';
+import ValidationPage from './pages/ValidationPage';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -134,8 +136,9 @@ function AppRoutes() {
       }>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="projects" element={<PlaceholderPage title="Projects" />} />
-        <Route path="projects/:id" element={<PlaceholderPage title="Project Details" />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:id" element={<ProjectDetailPage />} />
+        <Route path="projects/:id/validate" element={<ValidationPage />} />
         <Route path="validations" element={<PlaceholderPage title="Validations" />} />
         <Route path="templates" element={<PlaceholderPage title="Templates" />} />
         <Route path="audit" element={<PlaceholderPage title="Audit Log" />} />
