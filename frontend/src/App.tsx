@@ -15,6 +15,8 @@ import DashboardPage from './pages/DashboardPage';
 import ProjectsPage from './pages/ProjectsPage';
 import ProjectDetailPage from './pages/ProjectDetailPage';
 import ValidationPage from './pages/ValidationPage';
+import TemplatesPage from './pages/TemplatesPage';
+import AuditLogPage from './pages/AuditLogPage';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -140,8 +142,8 @@ function AppRoutes() {
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="projects/:id/validate" element={<ValidationPage />} />
         <Route path="validations" element={<PlaceholderPage title="Validations" />} />
-        <Route path="templates" element={<PlaceholderPage title="Templates" />} />
-        <Route path="audit" element={<PlaceholderPage title="Audit Log" />} />
+        <Route path="templates" element={<TemplatesPage />} />
+        <Route path="audit" element={<AuditLogPage />} />
         <Route path="profile" element={<PlaceholderPage title="Profile" />} />
         <Route path="settings" element={<PlaceholderPage title="Settings" />} />
       </Route>

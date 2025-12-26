@@ -208,6 +208,34 @@ export const templatesApi = {
         const response = await api.get(`/templates/${id}`);
         return response.data;
     },
+
+    create: async (data: any) => {
+        const response = await api.post('/templates', data);
+        return response.data;
+    },
+
+    delete: async (id: string) => {
+        const response = await api.delete(`/templates/${id}`);
+        return response.data;
+    },
+};
+
+// Audit API
+export const auditApi = {
+    list: async (params?: any) => {
+        const response = await api.get('/audit', { params });
+        return response.data;
+    },
+
+    getSummary: async () => {
+        const response = await api.get('/audit/summary');
+        return response.data;
+    },
+
+    get: async (id: string) => {
+        const response = await api.get(`/audit/${id}`);
+        return response.data;
+    },
 };
 
 export default api;
