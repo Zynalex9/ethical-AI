@@ -35,6 +35,12 @@ joblib==1.3.2
 shap==0.44.0
 lime==0.2.0.1
 
+# Privacy Libraries
+diffprivlib==0.6.4
+
+# MLflow for experiment tracking
+mlflow==2.9.2
+
 # Deep Learning (for model loading)
 # tensorflow==2.15.0  # Uncomment if needed
 # torch==2.1.2        # Uncomment if needed
