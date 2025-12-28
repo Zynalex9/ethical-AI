@@ -1,10 +1,7 @@
-// API service for communicating with the backend
-
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
-// Create axios instance with default config
 const api: AxiosInstance = axios.create({
     baseURL: API_BASE_URL,
     headers: {
@@ -166,6 +163,43 @@ export const datasetsApi = {
 
 // Validation API
 export const validationApi = {
+    // Run all 4 validations in background
+    runAll: async (data: {
+        model_id: string;
+        dataset_id: string;
+        fairness_config: {
+            sensitive_feature: string;
+            target_column: string;
+            thresholds?: Record<string, number>;
+        };
+        transparency_config: {
+            target_column: string;
+            sample_size?: number;
+        };
+        privacy_config: {
+            k_anonymity_k?: number;
+            l_diversity_l?: number;
+            quasi_identifiers?: string[];
+            sensitive_attribute?: string;
+        };
+    }) => {
+        const response = await api.post('/validate/all', data);
+        return response.data;
+    },
+
+    // Check task status
+    getTaskStatus: async (taskId: string) => {
+        const response = await api.get(`/validate/task/${taskId}`);
+        return response.data;
+    },
+
+    // Get suite results
+    getSuiteResults: async (suiteId: string) => {
+        const response = await api.get(`/validate/suite/${suiteId}/results`);
+        return response.data;
+    },
+
+    // Legacy endpoints (still work for individual validations)
     runFairness: async (modelId: string, datasetId: string, requirementId: string) => {
         const response = await api.post('/validate/fairness', {
             model_id: modelId,
@@ -188,6 +222,12 @@ export const validationApi = {
             dataset_id: datasetId,
             requirements,
         });
+        return response.data;
+    },
+
+    // Get validation history
+    getHistory: async (projectId: string) => {
+        const response = await api.get(`/validate/history/${projectId}`);
         return response.data;
     },
 

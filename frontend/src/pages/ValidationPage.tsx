@@ -1,6 +1,4 @@
-// Validation page - Run fairness/transparency/privacy validations
-
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
     Box,
@@ -9,45 +7,51 @@ import {
     Button,
     Card,
     CardContent,
-    Grid,
     FormControl,
     InputLabel,
     Select,
     MenuItem,
-    Stepper,
-    Step,
-    StepLabel,
     Alert,
     CircularProgress,
     Chip,
     IconButton,
+    LinearProgress,
+    Paper,
 } from '@mui/material';
 import {
     ArrowBack as BackIcon,
     Balance as FairnessIcon,
     Visibility as TransparencyIcon,
     Lock as PrivacyIcon,
+    Assignment as AccountabilityIcon,
     CheckCircle as CheckIcon,
     Cancel as FailIcon,
     PlayArrow as RunIcon,
+    Refresh as RefreshIcon,
 } from '@mui/icons-material';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { modelsApi, datasetsApi, validationApi } from '../services/api';
-
-const steps = ['Select Model & Dataset', 'Choose Validation Type', 'Configure & Run'];
 
 export default function ValidationPage() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
 
-    const [activeStep, setActiveStep] = useState(0);
+    // Form state
     const [selectedModel, setSelectedModel] = useState('');
     const [selectedDataset, setSelectedDataset] = useState('');
-    const [validationType, setValidationType] = useState<'fairness' | 'transparency' | 'privacy'>('fairness');
     const [sensitiveFeature, setSensitiveFeature] = useState('');
     const [targetColumn, setTargetColumn] = useState('');
-    const [results, setResults] = useState<any>(null);
+    const [quasiIdentifiers, setQuasiIdentifiers] = useState<string[]>([]);
+    const [sensitiveAttribute, setSensitiveAttribute] = useState('');
     const [error, setError] = useState('');
+
+    // Validation state
+    const [isRunning, setIsRunning] = useState(false);
+    const [taskId, setTaskId] = useState('');
+    const [suiteId, setSuiteId] = useState('');
+    const [progress, setProgress] = useState(0);
+    const [currentStep, setCurrentStep] = useState('');
+    const [results, setResults] = useState<any>(null);
 
     // Fetch models and datasets
     const { data: models } = useQuery({
@@ -65,75 +69,102 @@ export default function ValidationPage() {
     // Get selected dataset for column info
     const selectedDatasetObj = datasets?.find((d: any) => d.id === selectedDataset);
 
-    // Validation mutations
-    const fairnessMutation = useMutation({
-        mutationFn: () => validationApi.runFairness(selectedModel, selectedDataset, 'req-1'),
-        onSuccess: (data) => {
-            setResults(data);
-            setActiveStep(3);
-        },
-        onError: (err: Error) => {
-            setError(err.message);
-        },
-    });
+    // Poll task status
+    useEffect(() => {
+        if (!taskId || !isRunning) return;
 
-    const transparencyMutation = useMutation({
-        mutationFn: () => validationApi.runTransparency(selectedModel, selectedDataset),
-        onSuccess: (data) => {
-            setResults(data);
-            setActiveStep(3);
-        },
-        onError: (err: Error) => {
-            setError(err.message);
-        },
-    });
+        const interval = setInterval(async () => {
+            try {
+                const status = await validationApi.getTaskStatus(taskId);
 
-    const privacyMutation = useMutation({
-        mutationFn: () => validationApi.runPrivacy(selectedDataset, {}),
-        onSuccess: (data) => {
-            setResults(data);
-            setActiveStep(3);
-        },
-        onError: (err: Error) => {
-            setError(err.message);
-        },
-    });
+                setProgress(status.progress);
+                setCurrentStep(status.current_step || '');
 
-    const handleNext = () => {
-        if (activeStep === 0) {
-            if (!selectedModel || !selectedDataset) {
-                setError('Please select both a model and dataset');
-                return;
+                if (status.state === 'SUCCESS') {
+                    // Task completed, fetch results
+                    if (suiteId) {
+                        const suiteResults = await validationApi.getSuiteResults(suiteId);
+                        setResults(suiteResults);
+                    }
+                    setIsRunning(false);
+                    clearInterval(interval);
+                } else if (status.state === 'FAILURE') {
+                    setError(status.error || 'Validation failed');
+                    setIsRunning(false);
+                    clearInterval(interval);
+                }
+            } catch (err: any) {
+                console.error('Error polling status:', err);
+                setError(err.message);
+                setIsRunning(false);
+                clearInterval(interval);
             }
-        }
+        }, 2000); // Poll every 2 seconds
+
+        return () => clearInterval(interval);
+    }, [taskId, isRunning, suiteId]);
+
+    const handleRunAllValidations = async () => {
         setError('');
-        setActiveStep((prev) => prev + 1);
-    };
 
-    const handleBack = () => {
-        setActiveStep((prev) => prev - 1);
-    };
+        // Validation
+        if (!selectedModel || !selectedDataset) {
+            setError('Please select both a model and dataset');
+            return;
+        }
+        if (!sensitiveFeature || !targetColumn) {
+            setError('Please specify sensitive feature and target column');
+            return;
+        }
 
-    const handleRunValidation = () => {
-        setError('');
-        if (validationType === 'fairness') {
-            if (!sensitiveFeature || !targetColumn) {
-                setError('Please specify sensitive feature and target column');
-                return;
-            }
-            fairnessMutation.mutate();
-        } else if (validationType === 'transparency') {
-            if (!targetColumn) {
-                setError('Please specify target column');
-                return;
-            }
-            transparencyMutation.mutate();
-        } else {
-            privacyMutation.mutate();
+        setIsRunning(true);
+        setProgress(0);
+        setCurrentStep('Queuing validations...');
+        setResults(null);
+
+        try {
+            const response = await validationApi.runAll({
+                model_id: selectedModel,
+                dataset_id: selectedDataset,
+                fairness_config: {
+                    sensitive_feature: sensitiveFeature,
+                    target_column: targetColumn,
+                    thresholds: {
+                        demographic_parity_ratio: 0.8,
+                        equalized_odds_ratio: 0.8,
+                        disparate_impact_ratio: 0.8,
+                    },
+                },
+                transparency_config: {
+                    target_column: targetColumn,
+                    sample_size: 100,
+                },
+                privacy_config: {
+                    k_anonymity_k: 5,
+                    l_diversity_l: 2,
+                    quasi_identifiers: quasiIdentifiers.length > 0 ? quasiIdentifiers : undefined,
+                    sensitive_attribute: sensitiveAttribute || undefined,
+                },
+            });
+
+            setTaskId(response.task_id);
+            setSuiteId(response.suite_id);
+            setCurrentStep('Validation suite queued');
+        } catch (err: any) {
+            setError(err.response?.data?.detail || err.message);
+            setIsRunning(false);
         }
     };
 
-    const isRunning = fairnessMutation.isPending || transparencyMutation.isPending || privacyMutation.isPending;
+    const handleReset = () => {
+        setIsRunning(false);
+        setTaskId('');
+        setSuiteId('');
+        setProgress(0);
+        setCurrentStep('');
+        setResults(null);
+        setError('');
+    };
 
     return (
         <Container maxWidth="lg" sx={{ py: 4 }}>
@@ -143,220 +174,182 @@ export default function ValidationPage() {
                     <BackIcon />
                 </IconButton>
                 <Typography variant="h4" sx={{ fontWeight: 700 }}>
-                    Run Validation
+                    Ethical AI Validation Suite
                 </Typography>
             </Box>
 
-            {/* Stepper */}
-            <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
-                {steps.map((label) => (
-                    <Step key={label}>
-                        <StepLabel>{label}</StepLabel>
-                    </Step>
-                ))}
-                <Step>
-                    <StepLabel>Results</StepLabel>
-                </Step>
-            </Stepper>
-
             {error && (
-                <Alert severity="error" sx={{ mb: 3 }}>
+                <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError('')}>
                     {error}
                 </Alert>
             )}
 
-            {/* Step 1: Select Model & Dataset */}
-            {activeStep === 0 && (
-                <Card>
+            {/* Configuration Form */}
+            {!isRunning && !results && (
+                <Card sx={{ mb: 3 }}>
                     <CardContent sx={{ p: 4 }}>
                         <Typography variant="h6" gutterBottom>
-                            Select Model and Dataset
+                            Configure Validation Suite
                         </Typography>
-                        <Grid container spacing={3}>
-                            <Grid size={{ xs: 12, md: 6 }}>
-                                <FormControl fullWidth>
-                                    <InputLabel>Model</InputLabel>
-                                    <Select
-                                        value={selectedModel}
-                                        label="Model"
-                                        onChange={(e) => setSelectedModel(e.target.value)}
-                                    >
-                                        {models?.map((model: any) => (
-                                            <MenuItem key={model.id} value={model.id}>
-                                                {model.name} ({model.model_type})
-                                            </MenuItem>
-                                        ))}
-                                    </Select>
-                                </FormControl>
-                            </Grid>
-                            <Grid size={{ xs: 12, md: 6 }}>
-                                <FormControl fullWidth>
-                                    <InputLabel>Dataset</InputLabel>
-                                    <Select
-                                        value={selectedDataset}
-                                        label="Dataset"
-                                        onChange={(e) => setSelectedDataset(e.target.value)}
-                                    >
-                                        {datasets?.map((dataset: any) => (
-                                            <MenuItem key={dataset.id} value={dataset.id}>
-                                                {dataset.name} ({dataset.row_count} rows)
-                                            </MenuItem>
-                                        ))}
-                                    </Select>
-                                </FormControl>
-                            </Grid>
-                        </Grid>
-                        <Box sx={{ mt: 4, display: 'flex', justifyContent: 'flex-end' }}>
-                            <Button variant="contained" onClick={handleNext}>
-                                Next
-                            </Button>
-                        </Box>
-                    </CardContent>
-                </Card>
-            )}
-
-            {/* Step 2: Choose Validation Type */}
-            {activeStep === 1 && (
-                <Grid container spacing={3}>
-                    {[
-                        {
-                            type: 'fairness',
-                            icon: FairnessIcon,
-                            title: 'Fairness Validation',
-                            description: 'Check for bias across demographic groups using Fairlearn metrics',
-                            color: '#4caf50',
-                        },
-                        {
-                            type: 'transparency',
-                            icon: TransparencyIcon,
-                            title: 'Transparency Validation',
-                            description: 'Generate SHAP explanations and model documentation',
-                            color: '#2196f3',
-                        },
-                        {
-                            type: 'privacy',
-                            icon: PrivacyIcon,
-                            title: 'Privacy Validation',
-                            description: 'Detect PII and check k-anonymity of dataset',
-                            color: '#ff9800',
-                        },
-                    ].map((option) => (
-                        <Grid key={option.type} size={{ xs: 12, md: 4 }}>
-                            <Card
-                                sx={{
-                                    cursor: 'pointer',
-                                    border: validationType === option.type ? 2 : 1,
-                                    borderColor: validationType === option.type ? option.color : 'divider',
-                                    transition: 'all 0.2s',
-                                    '&:hover': {
-                                        borderColor: option.color,
-                                    },
-                                }}
-                                onClick={() => setValidationType(option.type as any)}
-                            >
-                                <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                                    <option.icon sx={{ fontSize: 48, color: option.color, mb: 2 }} />
-                                    <Typography variant="h6" gutterBottom>
-                                        {option.title}
-                                    </Typography>
-                                    <Typography variant="body2" color="text.secondary">
-                                        {option.description}
-                                    </Typography>
-                                </CardContent>
-                            </Card>
-                        </Grid>
-                    ))}
-                    <Grid size={{ xs: 12 }}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <Button onClick={handleBack}>Back</Button>
-                            <Button variant="contained" onClick={handleNext}>
-                                Next
-                            </Button>
-                        </Box>
-                    </Grid>
-                </Grid>
-            )}
-
-            {/* Step 3: Configure & Run */}
-            {activeStep === 2 && (
-                <Card>
-                    <CardContent sx={{ p: 4 }}>
-                        <Typography variant="h6" gutterBottom>
-                            Configure {validationType.charAt(0).toUpperCase() + validationType.slice(1)} Validation
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                            This will run all 4 ethical validations: Fairness, Transparency, Privacy, and Accountability
                         </Typography>
 
-                        {validationType === 'fairness' && (
-                            <Grid container spacing={3}>
-                                <Grid size={{ xs: 12, md: 6 }}>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {/* Row 1 */}
+                            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                                {/* Model Selection */}
+                                <Box sx={{ flex: '1 1 45%', minWidth: 250 }}>
                                     <FormControl fullWidth>
-                                        <InputLabel>Sensitive Feature</InputLabel>
+                                        <InputLabel>Model</InputLabel>
+                                        <Select
+                                            value={selectedModel}
+                                            label="Model"
+                                            onChange={(e) => setSelectedModel(e.target.value)}
+                                        >
+                                            {models?.map((model: any) => (
+                                                <MenuItem key={model.id} value={model.id}>
+                                                    {model.name} ({model.model_type})
+                                                </MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+                                </Box>
+
+                                {/* Dataset Selection */}
+                                <Box sx={{ flex: '1 1 45%', minWidth: 250 }}>
+                                    <FormControl fullWidth>
+                                        <InputLabel>Dataset</InputLabel>
+                                        <Select
+                                            value={selectedDataset}
+                                            label="Dataset"
+                                            onChange={(e) => setSelectedDataset(e.target.value)}
+                                        >
+                                            {datasets?.map((dataset: any) => (
+                                                <MenuItem key={dataset.id} value={dataset.id}>
+                                                    {dataset.name} ({dataset.row_count} rows)
+                                                </MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+                                </Box>
+                            </Box>
+
+                            {/* Row 2 */}
+                            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                                {/* Sensitive Feature */}
+                                <Box sx={{ flex: '1 1 45%', minWidth: 250 }}>
+                                    <FormControl fullWidth>
+                                        <InputLabel>Sensitive Feature (for Fairness)</InputLabel>
                                         <Select
                                             value={sensitiveFeature}
-                                            label="Sensitive Feature"
+                                            label="Sensitive Feature (for Fairness)"
                                             onChange={(e) => setSensitiveFeature(e.target.value)}
+                                            disabled={!selectedDataset}
                                         >
                                             {selectedDatasetObj?.columns?.map((col: string) => (
                                                 <MenuItem key={col} value={col}>{col}</MenuItem>
                                             ))}
                                         </Select>
                                     </FormControl>
-                                </Grid>
-                                <Grid size={{ xs: 12, md: 6 }}>
+                                </Box>
+
+                                {/* Target Column */}
+                                <Box sx={{ flex: '1 1 45%', minWidth: 250 }}>
                                     <FormControl fullWidth>
                                         <InputLabel>Target Column</InputLabel>
                                         <Select
                                             value={targetColumn}
                                             label="Target Column"
                                             onChange={(e) => setTargetColumn(e.target.value)}
+                                            disabled={!selectedDataset}
                                         >
                                             {selectedDatasetObj?.columns?.map((col: string) => (
                                                 <MenuItem key={col} value={col}>{col}</MenuItem>
                                             ))}
                                         </Select>
                                     </FormControl>
-                                </Grid>
-                            </Grid>
-                        )}
+                                </Box>
+                            </Box>
 
-                        {validationType === 'transparency' && (
-                            <FormControl fullWidth sx={{ maxWidth: 400 }}>
-                                <InputLabel>Target Column</InputLabel>
-                                <Select
-                                    value={targetColumn}
-                                    label="Target Column"
-                                    onChange={(e) => setTargetColumn(e.target.value)}
-                                >
-                                    {selectedDatasetObj?.columns?.map((col: string) => (
-                                        <MenuItem key={col} value={col}>{col}</MenuItem>
-                                    ))}
-                                </Select>
-                            </FormControl>
-                        )}
+                            {/* Row 3 */}
+                            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                                {/* Quasi Identifiers */}
+                                <Box sx={{ flex: '1 1 45%', minWidth: 250 }}>
+                                    <FormControl fullWidth>
+                                        <InputLabel>Quasi-Identifiers (Optional, for Privacy)</InputLabel>
+                                        <Select
+                                            multiple
+                                            value={quasiIdentifiers}
+                                            label="Quasi-Identifiers (Optional, for Privacy)"
+                                            onChange={(e) => setQuasiIdentifiers(e.target.value as string[])}
+                                            disabled={!selectedDataset}
+                                            renderValue={(selected) => (
+                                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                                    {selected.map((value) => (
+                                                        <Chip key={value} label={value} size="small" />
+                                                    ))}
+                                                </Box>
+                                            )}
+                                        >
+                                            {selectedDatasetObj?.columns?.map((col: string) => (
+                                                <MenuItem key={col} value={col}>{col}</MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+                                </Box>
 
-                        {validationType === 'privacy' && (
-                            <Typography color="text.secondary">
-                                Privacy validation will automatically detect PII and check data anonymization.
-                                No additional configuration required.
-                            </Typography>
-                        )}
+                                {/* Sensitive Attribute */}
+                                <Box sx={{ flex: '1 1 45%', minWidth: 250 }}>
+                                    <FormControl fullWidth>
+                                        <InputLabel>Sensitive Attribute (Optional, for Privacy)</InputLabel>
+                                        <Select
+                                            value={sensitiveAttribute}
+                                            label="Sensitive Attribute (Optional, for Privacy)"
+                                            onChange={(e) => setSensitiveAttribute(e.target.value)}
+                                            disabled={!selectedDataset}
+                                        >
+                                            <MenuItem value="">None</MenuItem>
+                                            {selectedDatasetObj?.columns?.map((col: string) => (
+                                                <MenuItem key={col} value={col}>{col}</MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+                                </Box>
+                            </Box>
+                        </Box>
 
-                        <Box sx={{ mt: 4, display: 'flex', justifyContent: 'space-between' }}>
-                            <Button onClick={handleBack}>Back</Button>
+                        <Box sx={{ mt: 4, display: 'flex', justifyContent: 'flex-end' }}>
                             <Button
                                 variant="contained"
-                                startIcon={isRunning ? <CircularProgress size={20} /> : <RunIcon />}
-                                onClick={handleRunValidation}
-                                disabled={isRunning}
+                                size="large"
+                                startIcon={<RunIcon />}
+                                onClick={handleRunAllValidations}
+                                disabled={!selectedModel || !selectedDataset || !sensitiveFeature || !targetColumn}
                             >
-                                {isRunning ? 'Running...' : 'Run Validation'}
+                                Run All Validations
                             </Button>
                         </Box>
                     </CardContent>
                 </Card>
             )}
 
-            {/* Step 4: Results */}
-            {activeStep === 3 && results && (
+            {/* Progress Indicator */}
+            {isRunning && (
+                <Paper sx={{ p: 4, mb: 3 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                        <CircularProgress size={24} sx={{ mr: 2 }} />
+                        <Typography variant="h6">Running Validations...</Typography>
+                    </Box>
+                    <LinearProgress variant="determinate" value={progress} sx={{ mb: 2, height: 8, borderRadius: 1 }} />
+                    <Typography variant="body2" color="text.secondary">
+                        {currentStep} ({progress}%)
+                    </Typography>
+                </Paper>
+            )}
+
+            {/* Results */}
+            {results && (
                 <Box>
                     <Alert
                         severity={results.overall_passed ? 'success' : 'warning'}
@@ -364,111 +357,129 @@ export default function ValidationPage() {
                         icon={results.overall_passed ? <CheckIcon /> : <FailIcon />}
                     >
                         <Typography variant="h6">
-                            Validation {results.overall_passed ? 'Passed' : 'Failed'}
+                            Validation Suite {results.overall_passed ? 'Passed' : 'Failed'}
+                        </Typography>
+                        <Typography variant="body2">
+                            Suite ID: {results.suite_id}
                         </Typography>
                     </Alert>
 
-                    {validationType === 'fairness' && results.metrics && (
-                        <Card sx={{ mb: 3 }}>
-                            <CardContent>
-                                <Typography variant="h6" gutterBottom>Fairness Metrics</Typography>
-                                <Grid container spacing={2}>
-                                    {Object.entries(results.metrics).map(([name, data]: [string, any]) => (
-                                        <Grid key={name} size={{ xs: 12, md: 4 }}>
-                                            <Card variant="outlined">
-                                                <CardContent>
-                                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                        <Typography variant="subtitle1">{name.replace(/_/g, ' ')}</Typography>
-                                                        <Chip
-                                                            label={data.passed ? 'Pass' : 'Fail'}
-                                                            color={data.passed ? 'success' : 'error'}
-                                                            size="small"
-                                                        />
-                                                    </Box>
-                                                    <Typography variant="h4" sx={{ my: 1 }}>
-                                                        {typeof data.value === 'number' ? data.value.toFixed(3) : data.value}
-                                                    </Typography>
-                                                    <Typography variant="body2" color="text.secondary">
-                                                        Threshold: {data.threshold}
-                                                    </Typography>
-                                                </CardContent>
-                                            </Card>
-                                        </Grid>
-                                    ))}
-                                </Grid>
-                            </CardContent>
-                        </Card>
-                    )}
-
-                    {validationType === 'transparency' && results.global_importance && (
-                        <Card sx={{ mb: 3 }}>
-                            <CardContent>
-                                <Typography variant="h6" gutterBottom>Feature Importance (SHAP)</Typography>
-                                {Object.entries(results.global_importance)
-                                    .sort(([, a]: any, [, b]: any) => b - a)
-                                    .slice(0, 10)
-                                    .map(([feature, importance]: [string, any]) => (
-                                        <Box key={feature} sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                                            <Typography sx={{ width: 150, flexShrink: 0 }}>{feature}</Typography>
-                                            <Box sx={{ flex: 1, mx: 2 }}>
-                                                <Box
-                                                    sx={{
-                                                        height: 8,
-                                                        borderRadius: 1,
-                                                        background: 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
-                                                        width: `${(importance / Object.values(results.global_importance as Record<string, number>)[0]) * 100}%`,
-                                                    }}
-                                                />
-                                            </Box>
-                                            <Typography variant="body2" color="text.secondary">
-                                                {importance.toFixed(4)}
-                                            </Typography>
-                                        </Box>
-                                    ))}
-                            </CardContent>
-                        </Card>
-                    )}
-
-                    {validationType === 'privacy' && (
-                        <>
-                            {results.pii_detected?.length > 0 && (
-                                <Card sx={{ mb: 3 }}>
-                                    <CardContent>
-                                        <Typography variant="h6" gutterBottom color="warning.main">
-                                            ⚠️ PII Detected
-                                        </Typography>
-                                        {results.pii_detected.map((pii: any, i: number) => (
-                                            <Chip
-                                                key={i}
-                                                label={`${pii.column_name}: ${pii.pii_type}`}
-                                                color="warning"
-                                                sx={{ mr: 1, mb: 1 }}
-                                            />
-                                        ))}
-                                    </CardContent>
-                                </Card>
-                            )}
-
-                            {results.recommendations?.length > 0 && (
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                        {results.validations?.fairness && (
+                            <Box sx={{ flex: '1 1 45%', minWidth: 300 }}>
                                 <Card>
                                     <CardContent>
-                                        <Typography variant="h6" gutterBottom>Recommendations</Typography>
-                                        {results.recommendations.map((rec: string, i: number) => (
-                                            <Alert key={i} severity="info" sx={{ mb: 1 }}>
-                                                {rec}
-                                            </Alert>
-                                        ))}
+                                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                                            <FairnessIcon sx={{ fontSize: 32, color: '#4caf50', mr: 2 }} />
+                                            <Box sx={{ flex: 1 }}>
+                                                <Typography variant="h6">Fairness Validation</Typography>
+                                                <Chip
+                                                    label={results.validations.fairness.status}
+                                                    color={results.validations.fairness.status === 'completed' ? 'success' : 'default'}
+                                                    size="small"
+                                                />
+                                            </Box>
+                                        </Box>
+                                        <Typography variant="body2" color="text.secondary">
+                                            Progress: {results.validations.fairness.progress}%
+                                        </Typography>
+                                        {results.validations.fairness.mlflow_run_id && (
+                                            <Typography variant="caption" color="text.secondary">
+                                                MLflow Run: {results.validations.fairness.mlflow_run_id.substring(0, 8)}...
+                                            </Typography>
+                                        )}
                                     </CardContent>
                                 </Card>
-                            )}
-                        </>
-                    )}
+                            </Box>
+                        )}
+
+                        {results.validations?.transparency && (
+                            <Box sx={{ flex: '1 1 45%', minWidth: 300 }}>
+                                <Card>
+                                    <CardContent>
+                                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                                            <TransparencyIcon sx={{ fontSize: 32, color: '#2196f3', mr: 2 }} />
+                                            <Box sx={{ flex: 1 }}>
+                                                <Typography variant="h6">Transparency Validation</Typography>
+                                                <Chip
+                                                    label={results.validations.transparency.status}
+                                                    color={results.validations.transparency.status === 'completed' ? 'success' : 'default'}
+                                                    size="small"
+                                                />
+                                            </Box>
+                                        </Box>
+                                        <Typography variant="body2" color="text.secondary">
+                                            Progress: {results.validations.transparency.progress}%
+                                        </Typography>
+                                        {results.validations.transparency.mlflow_run_id && (
+                                            <Typography variant="caption" color="text.secondary">
+                                                MLflow Run: {results.validations.transparency.mlflow_run_id.substring(0, 8)}...
+                                            </Typography>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            </Box>
+                        )}
+
+                        {results.validations?.privacy && (
+                            <Box sx={{ flex: '1 1 45%', minWidth: 300 }}>
+                                <Card>
+                                    <CardContent>
+                                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                                            <PrivacyIcon sx={{ fontSize: 32, color: '#ff9800', mr: 2 }} />
+                                            <Box sx={{ flex: 1 }}>
+                                                <Typography variant="h6">Privacy Validation</Typography>
+                                                <Chip
+                                                    label={results.validations.privacy.status}
+                                                    color={results.validations.privacy.status === 'completed' ? 'success' : 'default'}
+                                                    size="small"
+                                                />
+                                            </Box>
+                                        </Box>
+                                        <Typography variant="body2" color="text.secondary">
+                                            Progress: {results.validations.privacy.progress}%
+                                        </Typography>
+                                        {results.validations.privacy.mlflow_run_id && (
+                                            <Typography variant="caption" color="text.secondary">
+                                                MLflow Run: {results.validations.privacy.mlflow_run_id.substring(0, 8)}...
+                                            </Typography>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            </Box>
+                        )}
+
+                        {/* Accountability */}
+                        <Box sx={{ flex: '1 1 45%', minWidth: 300 }}>
+                            <Card>
+                                <CardContent>
+                                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                                        <AccountabilityIcon sx={{ fontSize: 32, color: '#9c27b0', mr: 2 }} />
+                                        <Box sx={{ flex: 1 }}>
+                                            <Typography variant="h6">Accountability Tracking</Typography>
+                                            <Chip
+                                                label="MLflow Integrated"
+                                                color="success"
+                                                size="small"
+                                            />
+                                        </Box>
+                                    </Box>
+                                    <Typography variant="body2" color="text.secondary">
+                                        All validations tracked in MLflow
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                        View experiment runs in MLflow UI
+                                    </Typography>
+                                </CardContent>
+                            </Card>
+                        </Box>
+                    </Box>
 
                     <Box sx={{ mt: 3, display: 'flex', gap: 2 }}>
                         <Button variant="outlined" onClick={() => navigate(`/projects/${id}`)}>
                             Back to Project
                         </Button>
-                        <Button variant="contained" onClick={() => setActiveStep(0)}>
+                        <Button variant="contained" startIcon={<RefreshIcon />} onClick={handleReset}>
                             Run Another Validation
                         </Button>
                     </Box>

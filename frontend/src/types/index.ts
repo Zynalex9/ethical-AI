@@ -1,6 +1,3 @@
-// TypeScript type definitions for the application
-
-// User types
 export interface User {
     id: string;
     email: string;
@@ -104,6 +101,72 @@ export interface ValidationResult {
     threshold: number | null;
     passed: boolean;
     details: Record<string, unknown>;
+}
+
+// Validation Suite types (NEW)
+export interface ValidationSuite {
+    id: string;
+    model_id: string;
+    dataset_id: string;
+    celery_task_id: string | null;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    overall_passed: boolean | null;
+    fairness_validation_id: string | null;
+    transparency_validation_id: string | null;
+    privacy_validation_id: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    error_message: string | null;
+    created_by_id: string;
+    created_at: string;
+}
+
+export interface ValidationSuiteResponse {
+    suite_id: string;
+    task_id: string;
+    status: string;
+    message: string;
+}
+
+export interface TaskStatus {
+    task_id: string;
+    state: 'PENDING' | 'PROGRESS' | 'SUCCESS' | 'FAILURE';
+    progress: number;
+    current_step: string | null;
+    result: any | null;
+    error: string | null;
+}
+
+export interface SuiteResults {
+    suite_id: string;
+    status: string;
+    overall_passed: boolean | null;
+    started_at: string | null;
+    completed_at: string | null;
+    error_message: string | null;
+    validations: {
+        fairness?: {
+            validation_id: string;
+            status: string;
+            progress: number;
+            mlflow_run_id: string | null;
+            completed_at: string | null;
+        };
+        transparency?: {
+            validation_id: string;
+            status: string;
+            progress: number;
+            mlflow_run_id: string | null;
+            completed_at: string | null;
+        };
+        privacy?: {
+            validation_id: string;
+            status: string;
+            progress: number;
+            mlflow_run_id: string | null;
+            completed_at: string | null;
+        };
+    };
 }
 
 // Fairness report types
