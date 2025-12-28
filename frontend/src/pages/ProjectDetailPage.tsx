@@ -232,6 +232,32 @@ export default function ProjectDetailPage() {
         }
     };
 
+    // Delete model
+    const handleDeleteModel = async (modelId: string) => {
+        if (!confirm('Are you sure you want to delete this model?')) return;
+
+        try {
+            await modelsApi.delete(modelId);
+            queryClient.invalidateQueries({ queryKey: ['models', id] });
+            queryClient.invalidateQueries({ queryKey: ['project', id] });
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to delete model');
+        }
+    };
+
+    // Delete dataset
+    const handleDeleteDataset = async (datasetId: string) => {
+        if (!confirm('Are you sure you want to delete this dataset?')) return;
+
+        try {
+            await datasetsApi.delete(datasetId);
+            queryClient.invalidateQueries({ queryKey: ['datasets', id] });
+            queryClient.invalidateQueries({ queryKey: ['project', id] });
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to delete dataset');
+        }
+    };
+
     if (projectLoading) {
         return (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 8 }}>
@@ -341,7 +367,11 @@ export default function ProjectDetailPage() {
                                             {new Date(model.uploaded_at).toLocaleDateString()}
                                         </TableCell>
                                         <TableCell align="right">
-                                            <IconButton size="small" color="error">
+                                            <IconButton
+                                                size="small"
+                                                color="error"
+                                                onClick={() => handleDeleteModel(model.id)}
+                                            >
                                                 <DeleteIcon />
                                             </IconButton>
                                         </TableCell>
@@ -421,7 +451,11 @@ export default function ProjectDetailPage() {
                                             {new Date(dataset.uploaded_at).toLocaleDateString()}
                                         </TableCell>
                                         <TableCell align="right">
-                                            <IconButton size="small" color="error">
+                                            <IconButton
+                                                size="small"
+                                                color="error"
+                                                onClick={() => handleDeleteDataset(dataset.id)}
+                                            >
                                                 <DeleteIcon />
                                             </IconButton>
                                         </TableCell>

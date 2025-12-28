@@ -141,14 +141,13 @@ function AppRoutes() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="projects/:id/validate" element={<ValidationPage />} />
-        <Route path="validations" element={<PlaceholderPage title="Validations" />} />
+        <Route path="validations" element={<ValidationPage />} />
         <Route path="templates" element={<TemplatesPage />} />
         <Route path="audit" element={<AuditLogPage />} />
         <Route path="profile" element={<PlaceholderPage title="Profile" />} />
         <Route path="settings" element={<PlaceholderPage title="Settings" />} />
       </Route>
 
-      {/* Catch all */}
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
