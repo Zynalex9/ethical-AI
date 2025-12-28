@@ -579,3 +579,261 @@ async def get_validation_history(
         }
         for v in validations
     ]
+class AllValidationsRequest(BaseModel):
+    """Request to run all 4 validations in sequence."""
+    model_id: UUID
+    dataset_id: UUID
+    fairness_config: Dict[str, Any]
+    transparency_config: Dict[str, Any]
+    privacy_config: Dict[str, Any]
+
+
+class ValidationSuiteResponse(BaseModel):
+    """Response for validation suite creation."""
+    suite_id: UUID
+    task_id: str
+    status: str
+    message: str
+
+
+class TaskStatusResponse(BaseModel):
+    """Response for task status check."""
+    task_id: str
+    state: str
+    progress: int
+    current_step: Optional[str]
+    result: Optional[Dict[str, Any]]
+    error: Optional[str]
+
+
+@router.post("/all", response_model=ValidationSuiteResponse)
+async def run_all_validations(
+    request: AllValidationsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Run all 4 ethical validations in sequence as a background task.
+    
+    This endpoint:
+    1. Creates a ValidationSuite record
+    2. Queues a Celery task to run all validations
+    3. Returns immediately with task_id for status tracking
+    
+    The validations run in this order:
+    - Fairness validation
+    - Transparency/Explainability validation
+    - Privacy validation
+    - Accountability (tracked via MLflow)
+    """
+    from ..models.validation_suite import ValidationSuite
+    from ..tasks.validation_tasks import run_all_validations_task
+    
+    # Verify model access
+    result = await db.execute(
+        select(MLModel).where(MLModel.id == request.model_id)
+    )
+    model_record = result.scalar_one_or_none()
+    
+    if not model_record:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    if not await verify_access(db, current_user, model_record.project_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Verify dataset access
+    result = await db.execute(
+        select(Dataset).where(Dataset.id == request.dataset_id)
+    )
+    dataset_record = result.scalar_one_or_none()
+    
+    if not dataset_record:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    # Create validation suite
+    suite = ValidationSuite(
+        model_id=request.model_id,
+        dataset_id=request.dataset_id,
+        status="pending",
+        created_by_id=current_user.id,
+        started_at=datetime.now(timezone.utc)
+    )
+    db.add(suite)
+    await db.commit()
+    await db.refresh(suite)
+    
+    # Queue background task
+    task = run_all_validations_task.delay(
+        suite_id=str(suite.id),
+        model_id=str(request.model_id),
+        dataset_id=str(request.dataset_id),
+        fairness_config=request.fairness_config,
+        transparency_config=request.transparency_config,
+        privacy_config=request.privacy_config,
+        user_id=str(current_user.id)
+    )
+    
+    # Update suite with task ID
+    suite.celery_task_id = task.id
+    suite.status = "running"
+    await db.commit()
+    
+    # Create audit log
+    audit = AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.VALIDATION_RUN,
+        resource_type=ResourceType.VALIDATION,
+        resource_id=suite.id,
+        details={
+            "validation_type": "all",
+            "model_name": model_record.name,
+            "dataset_name": dataset_record.name,
+            "task_id": task.id
+        }
+    )
+    db.add(audit)
+    await db.commit()
+    
+    return ValidationSuiteResponse(
+        suite_id=suite.id,
+        task_id=task.id,
+        status="queued",
+        message="Validation suite queued. Use task_id to check status."
+    )
+
+
+@router.get("/task/{task_id}", response_model=TaskStatusResponse)
+async def get_task_status(task_id: str):
+    """
+    Get the status of a background validation task.
+    
+    Use this endpoint to poll for task progress and results.
+    
+    States:
+    - PENDING: Task is queued but not started
+    - PROGRESS: Task is running (check progress field)
+    - SUCCESS: Task completed successfully (check result field)
+    - FAILURE: Task failed (check error field)
+    """
+    from celery.result import AsyncResult
+    from ..celery_app import celery_app
+    
+    task = AsyncResult(task_id, app=celery_app)
+    
+    response = {
+        "task_id": task_id,
+        "state": task.state,
+        "progress": 0,
+        "current_step": None,
+        "result": None,
+        "error": None
+    }
+    
+    if task.state == "PENDING":
+        response["progress"] = 0
+        response["current_step"] = "Queued"
+    elif task.state == "PROGRESS":
+        info = task.info or {}
+        response["progress"] = info.get("progress", 0)
+        response["current_step"] = info.get("step", "Processing")
+    elif task.state == "SUCCESS":
+        response["progress"] = 100
+        response["current_step"] = "Completed"
+        response["result"] = task.result
+    elif task.state == "FAILURE":
+        response["progress"] = 0
+        response["current_step"] = "Failed"
+        response["error"] = str(task.info)
+    
+    return TaskStatusResponse(**response)
+
+
+@router.get("/suite/{suite_id}/results")
+async def get_suite_results(
+    suite_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get aggregate results for a validation suite.
+    
+    Returns all validation results in a single response:
+    - Fairness validation results
+    - Transparency validation results
+    - Privacy validation results
+    - Overall pass/fail status
+    - MLflow run IDs for accountability
+    """
+    from ..models.validation_suite import ValidationSuite
+    
+    # Get validation suite
+    result = await db.execute(
+        select(ValidationSuite).where(ValidationSuite.id == suite_id)
+    )
+    suite = result.scalar_one_or_none()
+    
+    if not suite:
+        raise HTTPException(status_code=404, detail="Validation suite not found")
+    
+    # Verify access
+    if not await verify_access(db, current_user, suite.model.project_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Build response
+    response = {
+        "suite_id": str(suite.id),
+        "status": suite.status,
+        "overall_passed": suite.overall_passed,
+        "started_at": suite.started_at,
+        "completed_at": suite.completed_at,
+        "error_message": suite.error_message,
+        "validations": {}
+    }
+    
+    # Get fairness validation
+    if suite.fairness_validation_id:
+        result = await db.execute(
+            select(Validation).where(Validation.id == suite.fairness_validation_id)
+        )
+        fairness_val = result.scalar_one_or_none()
+        if fairness_val:
+            response["validations"]["fairness"] = {
+                "validation_id": str(fairness_val.id),
+                "status": fairness_val.status.value,
+                "progress": fairness_val.progress,
+                "mlflow_run_id": fairness_val.mlflow_run_id,
+                "completed_at": fairness_val.completed_at
+            }
+    
+    # Get transparency validation
+    if suite.transparency_validation_id:
+        result = await db.execute(
+            select(Validation).where(Validation.id == suite.transparency_validation_id)
+        )
+        transparency_val = result.scalar_one_or_none()
+        if transparency_val:
+            response["validations"]["transparency"] = {
+                "validation_id": str(transparency_val.id),
+                "status": transparency_val.status.value,
+                "progress": transparency_val.progress,
+                "mlflow_run_id": transparency_val.mlflow_run_id,
+                "completed_at": transparency_val.completed_at
+            }
+    
+    # Get privacy validation
+    if suite.privacy_validation_id:
+        result = await db.execute(
+            select(Validation).where(Validation.id == suite.privacy_validation_id)
+        )
+        privacy_val = result.scalar_one_or_none()
+        if privacy_val:
+            response["validations"]["privacy"] = {
+                "validation_id": str(privacy_val.id),
+                "status": privacy_val.status.value,
+                "progress": privacy_val.progress,
+                "mlflow_run_id": privacy_val.mlflow_run_id,
+                "completed_at": privacy_val.completed_at
+            }
+    
+    return response
+
