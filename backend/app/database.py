@@ -1,3 +1,5 @@
+# app/database.py
+
 """
 Database connection setup with SQLAlchemy async engine.
 Provides async session management and base model class.
@@ -10,24 +12,9 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 
-# Create async engine
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.database_echo,
-    future=True,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10
-)
-
-# Create async session factory
-async_session_maker = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autocommit=False,
-    autoflush=False
-)
+# DO NOT create engine here — we'll do it lazily
+engine = None
+async_session_maker = None
 
 
 class Base(DeclarativeBase):
@@ -35,16 +22,31 @@ class Base(DeclarativeBase):
     pass
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """
-    Dependency that provides an async database session.
-    Automatically handles session lifecycle (commit/rollback/close).
+def create_engine_and_session():
+    """Create engine and session maker on first use or app startup."""
+    global engine, async_session_maker
     
-    Usage:
-        @app.get("/items")
-        async def get_items(db: AsyncSession = Depends(get_db)):
-            ...
-    """
+    if engine is None:
+        engine = create_async_engine(
+            settings.database_url,
+            echo=settings.database_echo,
+            future=True,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+        )
+        async_session_maker = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autocommit=False,
+            autoflush=False,
+        )
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Dependency for FastAPI routes."""
+    create_engine_and_session()  # Ensure engine exists
     async with async_session_maker() as session:
         try:
             yield session
@@ -57,17 +59,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """
-    Initialize database tables.
-    Creates all tables defined in models that inherit from Base.
-    """
+    """Create all tables — called on startup."""
+    create_engine_and_session()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 
 async def close_db() -> None:
-    """
-    Close database connections.
-    Should be called on application shutdown.
-    """
-    await engine.dispose()
+    """Dispose engine on shutdown."""
+    global engine
+    if engine is not None:
+        await engine.dispose()
+        engine = None
