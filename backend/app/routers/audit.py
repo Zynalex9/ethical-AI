@@ -100,30 +100,46 @@ async def get_audit_summary(
     current_user: User = Depends(get_current_user)
 ):
     """Get summary statistics of audit logs."""
-    if current_user.role.value not in ["admin", "auditor"]:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # Remove the role restriction - allow all authenticated users
+    # Non-admins/auditors will see statistics filtered to their own logs
     
     now = datetime.now(timezone.utc)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_ago = today - timedelta(days=7)
     
-    total = await db.scalar(select(func.count(AuditLog.id)))
-    today_count = await db.scalar(select(func.count(AuditLog.id)).where(AuditLog.created_at >= today))
-    week_count = await db.scalar(select(func.count(AuditLog.id)).where(AuditLog.created_at >= week_ago))
+    # Base query - filter by user if not admin/auditor
+    base_query = select(AuditLog)
+    if current_user.role.value not in ["admin", "auditor"]:
+        base_query = base_query.where(AuditLog.user_id == current_user.id)
     
-    # By action
-    action_stats = await db.execute(
-        select(AuditLog.action, func.count(AuditLog.id)).group_by(AuditLog.action)
-    )
+    # Apply base filter to all counts
+    total = await db.scalar(select(func.count(AuditLog.id)).select_from(base_query.subquery()))
+    
+    # For today
+    today_query = base_query.where(AuditLog.timestamp >= today)
+    today_count = await db.scalar(select(func.count(AuditLog.id)).select_from(today_query.subquery()))
+    
+    # For this week
+    week_query = base_query.where(AuditLog.timestamp >= week_ago)
+    week_count = await db.scalar(select(func.count(AuditLog.id)).select_from(week_query.subquery()))
+    
+    # By action (with user filter)
+    action_query = select(AuditLog.action, func.count(AuditLog.id)).group_by(AuditLog.action)
+    if current_user.role.value not in ["admin", "auditor"]:
+        action_query = action_query.where(AuditLog.user_id == current_user.id)
+    
+    action_stats = await db.execute(action_query)
     by_action = {
         (a.value if hasattr(a, 'value') else str(a)): c 
         for a, c in action_stats.all()
     }
     
-    # By resource
-    res_stats = await db.execute(
-        select(AuditLog.resource_type, func.count(AuditLog.id)).group_by(AuditLog.resource_type)
-    )
+    # By resource (with user filter)
+    res_query = select(AuditLog.resource_type, func.count(AuditLog.id)).group_by(AuditLog.resource_type)
+    if current_user.role.value not in ["admin", "auditor"]:
+        res_query = res_query.where(AuditLog.user_id == current_user.id)
+    
+    res_stats = await db.execute(res_query)
     by_resource = {
         (r.value if hasattr(r, 'value') else str(r)): c 
         for r, c in res_stats.all()

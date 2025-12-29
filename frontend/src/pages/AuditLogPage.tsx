@@ -41,6 +41,8 @@ export default function AuditLogPage() {
     const { data: summary } = useQuery({
         queryKey: ['audit-summary'],
         queryFn: auditApi.getSummary,
+        retry: false, // Don't retry on 403 (non-admin users)
+        meta: { ignoreError: true } // Suppress error notifications
     });
 
     return (

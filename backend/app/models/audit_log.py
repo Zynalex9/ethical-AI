@@ -44,6 +44,7 @@ class AuditAction(str, PyEnum):
     
     # Validation operations
     VALIDATION_START = "validation_start"
+    VALIDATION_RUN = "validation_run"
     VALIDATION_COMPLETE = "validation_complete"
     VALIDATION_FAIL = "validation_fail"
     
