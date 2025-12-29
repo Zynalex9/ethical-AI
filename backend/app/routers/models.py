@@ -156,7 +156,7 @@ async def upload_model(
         details={
             "model_name": name,
             "file_size": file_size,
-            "model_type": ml_model.model_type.value
+            "model_type": ml_model.model_type if isinstance(ml_model.model_type, str) else ml_model.model_type.value
         }
     )
     db.add(audit)
@@ -169,7 +169,7 @@ async def upload_model(
         description=ml_model.description,
         file_path=ml_model.file_path,
         file_size=ml_model.file_size,
-        model_type=ml_model.model_type.value,
+        model_type=ml_model.model_type if isinstance(ml_model.model_type, str) else ml_model.model_type.value,
         model_metadata=ml_model.model_metadata or {},
         version=ml_model.version,
         uploaded_at=ml_model.uploaded_at
@@ -212,7 +212,7 @@ async def list_models(
             description=m.description,
             file_path=m.file_path,
             file_size=m.file_size,
-            model_type=m.model_type.value,
+            model_type=m.model_type if isinstance(m.model_type, str) else m.model_type.value,
             model_metadata=m.model_metadata or {},
             version=m.version,
             uploaded_at=m.uploaded_at
@@ -252,7 +252,7 @@ async def get_model(
         description=model.description,
         file_path=model.file_path,
         file_size=model.file_size,
-        model_type=model.model_type.value,
+        model_type=model.model_type if isinstance(model.model_type, str) else model.model_type.value,
         model_metadata=model.model_metadata or {},
         version=model.version,
         uploaded_at=model.uploaded_at

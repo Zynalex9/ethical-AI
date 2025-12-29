@@ -20,6 +20,7 @@ import {
     TrendingUp as TrendingUpIcon,
     Schedule as ScheduleIcon,
 } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 // Stat card component
@@ -125,6 +126,7 @@ function ProjectCard({ project }: { project: { name: string; status: string; pro
 
 export default function DashboardPage() {
     const { user } = useAuth();
+    const navigate = useNavigate();
 
     // Mock data for demo
     const stats = [
@@ -156,6 +158,7 @@ export default function DashboardPage() {
                     variant="contained"
                     startIcon={<AddIcon />}
                     sx={{ px: 3 }}
+                    onClick={() => navigate('/projects')}
                 >
                     New Project
                 </Button>
@@ -178,7 +181,7 @@ export default function DashboardPage() {
                         <Typography variant="h6" sx={{ fontWeight: 600 }}>
                             Recent Projects
                         </Typography>
-                        <Button size="small">View All</Button>
+                        <Button size="small" onClick={() => navigate('/projects')}>View All</Button>
                     </Box>
                     {recentProjects.map((project) => (
                         <ProjectCard key={project.name} project={project} />
@@ -193,16 +196,16 @@ export default function DashboardPage() {
                     <Card>
                         <CardContent>
                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <Button variant="outlined" fullWidth startIcon={<AddIcon />}>
+                                <Button variant="outlined" fullWidth startIcon={<AddIcon />} onClick={() => navigate('/projects')}>
                                     Upload New Model
                                 </Button>
-                                <Button variant="outlined" fullWidth startIcon={<AddIcon />}>
+                                <Button variant="outlined" fullWidth startIcon={<AddIcon />} onClick={() => navigate('/projects')}>
                                     Upload Dataset
                                 </Button>
-                                <Button variant="outlined" fullWidth startIcon={<AssessmentIcon />}>
+                                <Button variant="outlined" fullWidth startIcon={<AssessmentIcon />} onClick={() => navigate('/validations')}>
                                     Run Validation
                                 </Button>
-                                <Button variant="outlined" fullWidth startIcon={<FolderIcon />}>
+                                <Button variant="outlined" fullWidth startIcon={<FolderIcon />} onClick={() => navigate('/templates')}>
                                     View Templates
                                 </Button>
                             </Box>
