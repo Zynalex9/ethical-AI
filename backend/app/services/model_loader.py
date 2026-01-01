@@ -19,11 +19,59 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Optional, Union, Tuple
 import logging
+import sys
+import pickle
 
 import numpy as np
 import joblib
 
 logger = logging.getLogger(__name__)
+
+
+# Compatibility shim for old sklearn pickle files
+class SklearnUnpickler(pickle.Unpickler):
+    """Custom unpickler to handle sklearn module path changes."""
+    
+    def find_class(self, module, name):
+        """Override to redirect old sklearn paths to new ones."""
+        # Map old sklearn internal modules to new paths
+        renamed_modules = {
+            'sklearn.linear_model.logistic': 'sklearn.linear_model._logistic',
+            'sklearn.linear_model.base': 'sklearn.linear_model._base',
+            'sklearn.tree.tree': 'sklearn.tree._tree',
+            'sklearn.ensemble.forest': 'sklearn.ensemble._forest',
+            'sklearn.ensemble.gradient_boosting': 'sklearn.ensemble._gb',
+            'sklearn.svm.classes': 'sklearn.svm._classes',
+            'sklearn.neighbors.classification': 'sklearn.neighbors._classification',
+            'sklearn.naive_bayes': 'sklearn.naive_bayes',
+        }
+        
+        # Handle numpy version incompatibilities (numpy 2.0 -> 1.x)
+        if module.startswith('numpy._core'):
+            # numpy 2.0 moved things to _core, map back to old locations
+            module = module.replace('numpy._core', 'numpy.core')
+        elif module.startswith('numpy.core') and not hasattr(np.core, name.split('.')[0] if '.' in name else name):
+            # numpy 1.x -> 2.0, try _core
+            try:
+                module = module.replace('numpy.core', 'numpy._core')
+            except:
+                pass
+        
+        if module in renamed_modules:
+            module = renamed_modules[module]
+        
+        try:
+            return super().find_class(module, name)
+        except (ImportError, AttributeError) as e:
+            logger.warning(f"Could not import {module}.{name}, trying alternative paths: {e}")
+            # Try to import from parent module
+            if '.' in module:
+                parent_module = '.'.join(module.split('.')[:-1])
+                try:
+                    return super().find_class(parent_module, name)
+                except:
+                    pass
+            raise
 
 
 class ModelWrapper(ABC):
@@ -337,12 +385,33 @@ class UniversalModelLoader:
     @classmethod
     def _load_sklearn(cls, filepath: Path) -> SklearnModelWrapper:
         """Load a scikit-learn model."""
+        logger.info(f"Loading sklearn model from {filepath}")
+        
         try:
+            # Try joblib first (preferred method)
             model = joblib.load(filepath)
-        except Exception:
-            import pickle
-            with open(filepath, 'rb') as f:
-                model = pickle.load(f)
+            logger.info("Model loaded successfully with joblib")
+        except Exception as joblib_error:
+            logger.warning(f"Joblib loading failed: {joblib_error}, trying custom unpickler")
+            # Try custom unpickler for compatibility
+            try:
+                with open(filepath, 'rb') as f:
+                    model = SklearnUnpickler(f).load()
+                logger.info("Model loaded successfully with custom unpickler")
+            except Exception as pickle_error:
+                logger.error(f"Custom unpickler failed: {pickle_error}")
+                # Last resort: standard pickle
+                try:
+                    with open(filepath, 'rb') as f:
+                        model = pickle.load(f)
+                    logger.info("Model loaded successfully with standard pickle")
+                except Exception as final_error:
+                    raise ValueError(
+                        f"Failed to load sklearn model from {filepath}. "
+                        f"Joblib error: {joblib_error}. "
+                        f"Pickle error: {pickle_error}. "
+                        f"Final error: {final_error}"
+                    )
         
         return SklearnModelWrapper(model)
     

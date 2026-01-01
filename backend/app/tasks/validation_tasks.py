@@ -6,6 +6,7 @@ validations to run without blocking HTTP requests.
 """
 
 import os
+import logging
 from typing import Dict, Any, Optional
 from uuid import UUID
 from datetime import datetime, timezone
@@ -26,6 +27,8 @@ from app.validators.fairness_validator import FairnessValidator
 from app.validators.explainability_engine import ExplainabilityEngine
 from app.validators.privacy_validator import PrivacyValidator
 from app.validators.accountability_tracker import AccountabilityTracker
+
+logger = logging.getLogger(__name__)
 
 
 # Create async engine for tasks
@@ -50,6 +53,285 @@ async def get_db_session():
     """Get database session for tasks."""
     async with async_session_maker() as session:
         return session
+
+
+# Core async validation functions (can be called directly or from Celery tasks)
+async def _run_fairness_validation_async(
+    db: AsyncSession,
+    validation_id: str,
+    model_id: str,
+    dataset_id: str,
+    sensitive_feature: str,
+    target_column: str,
+    thresholds: Optional[Dict[str, float]] = None,
+    user_id: Optional[str] = None,
+    progress_callback=None
+) -> Dict[str, Any]:
+    """Core fairness validation logic (async)."""
+    
+    def _convert_to_json_serializable(obj):
+        """Recursively convert numpy types to Python native types."""
+        import numpy as np
+        if isinstance(obj, dict):
+            return {k: _convert_to_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [_convert_to_json_serializable(item) for item in obj]
+        elif isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+    
+    try:
+        # Update progress
+        if progress_callback:
+            progress_callback(10, "Loading model")
+        
+        # Get validation record
+        result = await db.execute(
+            select(Validation).where(Validation.id == UUID(validation_id))
+        )
+        validation = result.scalar_one()
+        validation.status = ValidationStatus.RUNNING
+        validation.progress = 10
+        await db.commit()
+        
+        # Get model
+        result = await db.execute(
+            select(MLModel).where(MLModel.id == UUID(model_id))
+        )
+        model_record = result.scalar_one()
+        
+        # Get dataset
+        result = await db.execute(
+            select(Dataset).where(Dataset.id == UUID(dataset_id))
+        )
+        dataset_record = result.scalar_one()
+        
+        # Initialize accountability tracker
+        tracker = AccountabilityTracker(
+            tracking_uri=settings.mlflow_tracking_uri,
+            experiment_name=settings.mlflow_experiment_name,
+            use_mlflow=True
+        )
+        
+        tracker.start_validation_run(
+            model_name=model_record.name,
+            model_id=model_id,
+            dataset_name=dataset_record.name,
+            dataset_id=dataset_id,
+            requirement_name="Fairness Validation",
+            requirement_id=validation_id,
+            principle="fairness",
+            user_id=user_id
+        )
+        
+        if progress_callback:
+            progress_callback(30, "Loading data")
+        validation.progress = 30
+        await db.commit()
+        
+        # Load model
+        model = UniversalModelLoader.load(model_record.file_path)
+        logger.info(f"Model loaded: {type(model).__name__}, wrapper type: {model.model_type}")
+        
+        # Load dataset
+        df = pd.read_csv(dataset_record.file_path)
+        logger.info(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
+        
+        # Prepare data
+        X = df.drop(columns=[target_column])
+        y_true_raw = df[target_column]
+        sensitive = df[sensitive_feature].values
+        
+        # Encode target column to binary (0/1)
+        if y_true_raw.dtype == 'object' or y_true_raw.dtype.name == 'category':
+            logger.info(f"Target column unique values: {y_true_raw.unique()}")
+            # Encode as binary: assume positive class is the one with '>' or higher value
+            y_true = (y_true_raw.astype(str).str.contains('>|high|yes|true|1', case=False, regex=True)).astype(int)
+            logger.info(f"Encoded target to binary: {dict(zip(y_true_raw.unique(), [y_true[y_true_raw == val].iloc[0] if len(y_true[y_true_raw == val]) > 0 else None for val in y_true_raw.unique()]))}")
+        else:
+            y_true = y_true_raw.values
+        
+        logger.info(f"Features before encoding: {list(X.columns)}")
+        logger.info(f"X shape before encoding: {X.shape}")
+        
+        # Handle non-numeric features
+        for col in X.select_dtypes(include=['object']).columns:
+            X[col] = pd.factorize(X[col])[0]
+        
+        logger.info(f"X shape after encoding: {X.shape}")
+        
+        # Check if model has specific feature requirements
+        model_obj = model._model if hasattr(model, '_model') else model
+        if hasattr(model_obj, 'n_features_in_'):
+            expected_features = model_obj.n_features_in_
+            logger.info(f"Model expects {expected_features} features")
+            
+            if X.shape[1] != expected_features:
+                logger.warning(
+                    f"Feature mismatch: model expects {expected_features} features, "
+                    f"but dataset has {X.shape[1]} features after dropping target."
+                )
+                
+                # Try to match features if model has feature names
+                if hasattr(model_obj, 'feature_names_in_'):
+                    model_features = list(model_obj.feature_names_in_)
+                    logger.info(f"Model expects features: {model_features}")
+                    
+                    # Ensure we have all required features
+                    missing_features = set(model_features) - set(X.columns)
+                    if missing_features:
+                        raise ValueError(
+                            f"Dataset is missing features required by model: {missing_features}"
+                        )
+                    
+                    # Select and order features to match model
+                    X = X[model_features]
+                    logger.info(f"Selected {len(model_features)} features matching model: {list(X.columns)}")
+                else:
+                    # No feature names available, use first N features
+                    logger.warning(
+                        f"Model has no feature_names_in_, using first {expected_features} features"
+                    )
+                    original_cols = list(X.columns)
+                    X = X.iloc[:, :expected_features]
+                    logger.info(f"Selected first {expected_features} features: {list(X.columns)} (from {original_cols})")
+        else:
+            logger.info("Model has no n_features_in_ attribute, using all features")
+        
+        logger.info(f"Final X shape before prediction: {X.shape}")
+        
+        if progress_callback:
+            progress_callback(50, "Running predictions")
+        validation.progress = 50
+        await db.commit()
+        
+        # Get predictions
+        y_pred = model.predict(X.values)
+        
+        # Ensure predictions are binary (0 or 1) for fairness metrics
+        logger.info(f"Raw predictions - unique values: {np.unique(y_pred)}, dtype: {y_pred.dtype}")
+        y_pred = np.asarray(y_pred, dtype=int)
+        if not np.all(np.isin(y_pred, [0, 1])):
+            logger.warning(f"Predictions contain non-binary values: {np.unique(y_pred)}, converting to binary")
+            y_pred = (y_pred > 0.5).astype(int)
+        logger.info(f"Final predictions - unique values: {np.unique(y_pred)}")
+        
+        # Ensure y_true is binary
+        y_true_unique = np.unique(y_true)
+        logger.info(f"y_true unique values: {y_true_unique}")
+        if not np.all(np.isin(y_true, [0, 1])):
+            logger.error(f"y_true contains non-binary values: {y_true_unique}")
+            raise ValueError(f"Target values must be binary (0 or 1), got: {y_true_unique}")
+        
+        if progress_callback:
+            progress_callback(70, "Calculating fairness metrics")
+        validation.progress = 70
+        await db.commit()
+        
+        # Run fairness validation
+        thresholds = thresholds or {
+            'demographic_parity_ratio': 0.8,
+            'equalized_odds_ratio': 0.8,
+            'disparate_impact_ratio': 0.8
+        }
+        
+        validator = FairnessValidator(
+            y_true=y_true,
+            y_pred=y_pred,
+            sensitive_features=sensitive
+        )
+        
+        report = validator.validate_all(thresholds=thresholds)
+        
+        # Log metrics to MLflow
+        metrics_dict = {
+            m.metric_name: m.overall_value
+            for m in report.metrics
+        }
+        tracker.log_metrics(metrics_dict)
+        
+        # Convert report to dict and ensure JSON serializable
+        report_dict = report.to_dict()
+        report_dict = _convert_to_json_serializable(report_dict)
+        tracker.log_dict(report_dict, "fairness_report.json")
+        
+        if progress_callback:
+            progress_callback(90, "Saving results")
+        validation.progress = 90
+        await db.commit()
+        
+        # Update validation status
+        validation.status = ValidationStatus.COMPLETED
+        validation.progress = 100
+        validation.completed_at = datetime.now(timezone.utc)
+        validation.mlflow_run_id = tracker._current_run.info.run_id if tracker._current_run else None
+        await db.commit()
+        
+        # End MLflow run
+        tracker.end_validation_run(
+            status="passed" if report.overall_passed else "failed"
+        )
+        
+        # Create audit log
+        if user_id:
+            audit = AuditLog(
+                user_id=UUID(user_id),
+                action=AuditAction.VALIDATION_RUN,
+                resource_type=ResourceType.VALIDATION,
+                resource_id=UUID(validation_id),
+                details={
+                    "validation_type": "fairness",
+                    "model_name": model_record.name,
+                    "dataset_name": dataset_record.name,
+                    "passed": report.overall_passed
+                }
+            )
+            db.add(audit)
+            await db.commit()
+        
+        # Format response
+        metrics = {}
+        for m in report.metrics:
+            metrics[m.metric_name] = {
+                "value": m.overall_value,
+                "threshold": m.threshold,
+                "passed": m.passed,
+                "by_group": m.by_group
+            }
+        
+        return {
+            "validation_id": validation_id,
+            "status": "completed",
+            "overall_passed": report.overall_passed,
+            "metrics": metrics,
+            "group_metrics": {
+                "groups": report.groups,
+                "sample_sizes": report.sample_sizes
+            },
+            "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
+        }
+        
+    except Exception as e:
+        # Update validation on error
+        validation.status = ValidationStatus.FAILED
+        validation.error_message = str(e)
+        validation.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        
+        # End MLflow run with error
+        try:
+            tracker.end_validation_run(status="error", error_message=str(e))
+        except:
+            pass
+        
+        raise
 
 
 @celery_app.task(bind=True, name="run_fairness_validation_task")
@@ -81,173 +363,22 @@ def run_fairness_validation_task(
     """
     import asyncio
     
+    def progress_callback(progress, step):
+        self.update_state(state="PROGRESS", meta={"progress": progress, "step": step})
+    
     async def _run():
         async with async_session_maker() as db:
-            try:
-                # Update task state
-                self.update_state(state="PROGRESS", meta={"progress": 10, "step": "Loading model"})
-                
-                # Get validation record
-                result = await db.execute(
-                    select(Validation).where(Validation.id == UUID(validation_id))
-                )
-                validation = result.scalar_one()
-                validation.status = ValidationStatus.RUNNING
-                validation.progress = 10
-                await db.commit()
-                
-                # Get model
-                result = await db.execute(
-                    select(MLModel).where(MLModel.id == UUID(model_id))
-                )
-                model_record = result.scalar_one()
-                
-                # Get dataset
-                result = await db.execute(
-                    select(Dataset).where(Dataset.id == UUID(dataset_id))
-                )
-                dataset_record = result.scalar_one()
-                
-                # Initialize accountability tracker
-                tracker = AccountabilityTracker(
-                    tracking_uri=settings.mlflow_tracking_uri,
-                    experiment_name=settings.mlflow_experiment_name,
-                    use_mlflow=True
-                )
-                
-                tracker.start_validation_run(
-                    model_name=model_record.name,
-                    model_id=model_id,
-                    dataset_name=dataset_record.name,
-                    dataset_id=dataset_id,
-                    requirement_name="Fairness Validation",
-                    requirement_id=validation_id,
-                    principle="fairness",
-                    user_id=user_id
-                )
-                
-                self.update_state(state="PROGRESS", meta={"progress": 30, "step": "Loading data"})
-                validation.progress = 30
-                await db.commit()
-                
-                # Load model
-                model = UniversalModelLoader.load(model_record.file_path)
-                
-                # Load dataset
-                df = pd.read_csv(dataset_record.file_path)
-                
-                # Prepare data
-                X = df.drop(columns=[target_column])
-                y_true = df[target_column].values
-                sensitive = df[sensitive_feature].values
-                
-                # Handle non-numeric features
-                for col in X.select_dtypes(include=['object']).columns:
-                    X[col] = pd.factorize(X[col])[0]
-                
-                self.update_state(state="PROGRESS", meta={"progress": 50, "step": "Running predictions"})
-                validation.progress = 50
-                await db.commit()
-                
-                # Get predictions
-                y_pred = model.predict(X.values)
-                
-                self.update_state(state="PROGRESS", meta={"progress": 70, "step": "Calculating fairness metrics"})
-                validation.progress = 70
-                await db.commit()
-                
-                # Run fairness validation
-                thresholds = thresholds or {
-                    'demographic_parity_ratio': 0.8,
-                    'equalized_odds_ratio': 0.8,
-                    'disparate_impact_ratio': 0.8
-                }
-                
-                validator = FairnessValidator(
-                    y_true=y_true,
-                    y_pred=y_pred,
-                    sensitive_features=sensitive
-                )
-                
-                report = validator.validate_all(thresholds=thresholds)
-                
-                # Log metrics to MLflow
-                metrics_dict = {
-                    m.metric_name: m.overall_value
-                    for m in report.metrics
-                }
-                tracker.log_metrics(metrics_dict)
-                tracker.log_dict(report.to_dict(), "fairness_report.json")
-                
-                self.update_state(state="PROGRESS", meta={"progress": 90, "step": "Saving results"})
-                validation.progress = 90
-                await db.commit()
-                
-                # Update validation status
-                validation.status = ValidationStatus.COMPLETED
-                validation.progress = 100
-                validation.completed_at = datetime.now(timezone.utc)
-                validation.mlflow_run_id = tracker.current_run_id
-                await db.commit()
-                
-                # End MLflow run
-                tracker.end_validation_run(
-                    status="passed" if report.overall_passed else "failed"
-                )
-                
-                # Create audit log
-                if user_id:
-                    audit = AuditLog(
-                        user_id=UUID(user_id),
-                        action=AuditAction.VALIDATION_RUN,
-                        resource_type=ResourceType.VALIDATION,
-                        resource_id=UUID(validation_id),
-                        details={
-                            "validation_type": "fairness",
-                            "model_name": model_record.name,
-                            "dataset_name": dataset_record.name,
-                            "passed": report.overall_passed
-                        }
-                    )
-                    db.add(audit)
-                    await db.commit()
-                
-                # Format response
-                metrics = {}
-                for m in report.metrics:
-                    metrics[m.metric_name] = {
-                        "value": m.overall_value,
-                        "threshold": m.threshold,
-                        "passed": m.passed,
-                        "by_group": m.by_group
-                    }
-                
-                return {
-                    "validation_id": validation_id,
-                    "status": "completed",
-                    "overall_passed": report.overall_passed,
-                    "metrics": metrics,
-                    "group_metrics": {
-                        "groups": report.groups,
-                        "sample_sizes": report.sample_sizes
-                    },
-                    "mlflow_run_id": tracker.current_run_id
-                }
-                
-            except Exception as e:
-                # Update validation on error
-                validation.status = ValidationStatus.FAILED
-                validation.error_message = str(e)
-                validation.completed_at = datetime.now(timezone.utc)
-                await db.commit()
-                
-                # End MLflow run with error
-                try:
-                    tracker.end_validation_run(status="error", error_message=str(e))
-                except:
-                    pass
-                
-                raise
+            return await _run_fairness_validation_async(
+                db=db,
+                validation_id=validation_id,
+                model_id=model_id,
+                dataset_id=dataset_id,
+                sensitive_feature=sensitive_feature,
+                target_column=target_column,
+                thresholds=thresholds,
+                user_id=user_id,
+                progress_callback=progress_callback
+            )
     
     # Run async function using asyncio event loop
     loop = asyncio.new_event_loop()
@@ -380,7 +511,7 @@ def run_transparency_validation_task(
                 validation.status = ValidationStatus.COMPLETED
                 validation.progress = 100
                 validation.completed_at = datetime.now(timezone.utc)
-                validation.mlflow_run_id = tracker.current_run_id
+                validation.mlflow_run_id = tracker._current_run.info.run_id if tracker._current_run else None
                 await db.commit()
                 
                 tracker.end_validation_run(status="passed")
@@ -406,7 +537,7 @@ def run_transparency_validation_task(
                     "status": "completed",
                     "global_importance": importance_dict,
                     "model_card": model_card.to_dict(),
-                    "mlflow_run_id": tracker.current_run_id
+                    "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
                 }
                 
             except Exception as e:
@@ -541,7 +672,7 @@ def run_privacy_validation_task(
                 validation.status = ValidationStatus.COMPLETED
                 validation.progress = 100
                 validation.completed_at = datetime.now(timezone.utc)
-                validation.mlflow_run_id = tracker.current_run_id
+                validation.mlflow_run_id = tracker._current_run.info.run_id if tracker._current_run else None
                 await db.commit()
                 
                 tracker.end_validation_run(
@@ -575,7 +706,7 @@ def run_privacy_validation_task(
                     "k_anonymity": report.k_anonymity.to_dict() if report.k_anonymity else None,
                     "l_diversity": report.l_diversity.to_dict() if report.l_diversity else None,
                     "recommendations": report.recommendations,
-                    "mlflow_run_id": tracker.current_run_id
+                    "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
                 }
                 
             except Exception as e:
@@ -625,17 +756,6 @@ def run_all_validations_task(
     import asyncio
     from app.models.validation_suite import ValidationSuite
     
-    # Helper to wait for Celery task in async context
-    async def wait_for_task(task_result, timeout=300):
-        """Wait for a Celery task result in async context."""
-        import time
-        start = time.time()
-        while not task_result.ready():
-            if time.time() - start > timeout:
-                raise TimeoutError(f"Task timed out after {timeout} seconds")
-            await asyncio.sleep(1)  # Check every second
-        return task_result.result
-    
     async def _run():
         suite = None
         async with async_session_maker() as db:
@@ -664,15 +784,16 @@ def run_all_validations_task(
                 await db.commit()
                 await db.refresh(fairness_validation)
                 
-                # Run fairness validation using Celery delay
-                fairness_task = run_fairness_validation_task.delay(
+                # Run fairness validation directly (not via .delay())
+                fairness_result = await _run_fairness_validation_async(
+                    db=db,
                     validation_id=str(fairness_validation.id),
                     model_id=model_id,
                     dataset_id=dataset_id,
                     user_id=user_id,
+                    progress_callback=lambda p, s: self.update_state(state="PROGRESS", meta={"progress": 10 + p//4, "step": f"Fairness: {s}"}),
                     **fairness_config
                 )
-                fairness_result = await wait_for_task(fairness_task)
                 results["validations"]["fairness"] = fairness_result
                 
                 # 2. Transparency Validation
@@ -688,21 +809,25 @@ def run_all_validations_task(
                 await db.commit()
                 await db.refresh(transparency_validation)
                 
-                # Run transparency validation using Celery delay
-                transparency_task = run_transparency_validation_task.delay(
-                    validation_id=str(transparency_validation.id),
-                    model_id=model_id,
-                    dataset_id=dataset_id,
-                    user_id=user_id,
-                    **transparency_config
+                # Call transparency task directly via .apply() to run in same process
+                transparency_task_result = run_transparency_validation_task.apply(
+                    args=[
+                        str(transparency_validation.id),
+                        model_id,
+                        dataset_id,
+                        fairness_config.get('target_column'),  # Reuse target column
+                        100,  # sample_size
+                        user_id
+                    ]
                 )
-                transparency_result = await wait_for_task(transparency_task)
+                transparency_result = transparency_task_result.result
                 results["validations"]["transparency"] = transparency_result
                 
                 # 3. Privacy Validation
                 self.update_state(state="PROGRESS", meta={"progress": 70, "step": "Privacy validation"})
                 
                 privacy_validation = Validation(
+                    model_id=UUID(model_id),  # Include model_id to satisfy NOT NULL constraint
                     dataset_id=UUID(dataset_id),
                     status=ValidationStatus.PENDING,
                     progress=0
@@ -711,14 +836,16 @@ def run_all_validations_task(
                 await db.commit()
                 await db.refresh(privacy_validation)
                 
-                # Run privacy validation using Celery delay
-                privacy_task = run_privacy_validation_task.delay(
-                    validation_id=str(privacy_validation.id),
-                    dataset_id=dataset_id,
-                    user_id=user_id,
-                    **privacy_config
+                # Call privacy task directly
+                privacy_task_result = run_privacy_validation_task.apply(
+                    args=[
+                        str(privacy_validation.id),
+                        dataset_id,
+                        user_id
+                    ],
+                    kwargs=privacy_config
                 )
-                privacy_result = await wait_for_task(privacy_task)
+                privacy_result = privacy_task_result.result
                 results["validations"]["privacy"] = privacy_result
                 
                 # Update suite
