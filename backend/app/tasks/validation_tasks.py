@@ -136,84 +136,141 @@ async def _run_fairness_validation_async(
         validation.progress = 30
         await db.commit()
         
-        # Load model
-        model = UniversalModelLoader.load(model_record.file_path)
-        logger.info(f"Model loaded: {type(model).__name__}, wrapper type: {model.model_type}")
-        
         # Load dataset
         df = pd.read_csv(dataset_record.file_path)
         logger.info(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
         
-        # Prepare data
-        X = df.drop(columns=[target_column])
-        y_true_raw = df[target_column]
-        sensitive = df[sensitive_feature].values
+        # Check if target column is provided
+        use_predictions_as_truth = target_column is None or target_column not in df.columns
         
-        # Encode target column to binary (0/1)
-        if y_true_raw.dtype == 'object' or y_true_raw.dtype.name == 'category':
-            logger.info(f"Target column unique values: {y_true_raw.unique()}")
-            # Encode as binary: assume positive class is the one with '>' or higher value
-            y_true = (y_true_raw.astype(str).str.contains('>|high|yes|true|1', case=False, regex=True)).astype(int)
-            logger.info(f"Encoded target to binary: {dict(zip(y_true_raw.unique(), [y_true[y_true_raw == val].iloc[0] if len(y_true[y_true_raw == val]) > 0 else None for val in y_true_raw.unique()]))}")
-        else:
-            y_true = y_true_raw.values
-        
-        logger.info(f"Features before encoding: {list(X.columns)}")
-        logger.info(f"X shape before encoding: {X.shape}")
-        
-        # Handle non-numeric features
-        for col in X.select_dtypes(include=['object']).columns:
-            X[col] = pd.factorize(X[col])[0]
-        
-        logger.info(f"X shape after encoding: {X.shape}")
-        
-        # Check if model has specific feature requirements
-        model_obj = model._model if hasattr(model, '_model') else model
-        if hasattr(model_obj, 'n_features_in_'):
-            expected_features = model_obj.n_features_in_
-            logger.info(f"Model expects {expected_features} features")
+        if use_predictions_as_truth:
+            logger.warning("⚠️ NO TARGET COLUMN PROVIDED - Using prediction-only mode")
+            logger.warning("⚠️ This mode checks if predictions are INTERNALLY FAIR, not if they match actual outcomes")
+            logger.warning("⚠️ Results may be inaccurate without ground truth comparison")
             
-            if X.shape[1] != expected_features:
-                logger.warning(
-                    f"Feature mismatch: model expects {expected_features} features, "
-                    f"but dataset has {X.shape[1]} features after dropping target."
-                )
+            # Prepare features (all columns except sensitive feature)
+            X = df.drop(columns=[sensitive_feature] if sensitive_feature in df.columns else [])
+            sensitive = df[sensitive_feature].values
+            
+            logger.info(f"Features before encoding: {list(X.columns)}")
+            logger.info(f"X shape before encoding: {X.shape}")
+            
+            # Handle non-numeric features
+            for col in X.select_dtypes(include=['object']).columns:
+                X[col] = pd.factorize(X[col])[0]
+            
+            logger.info(f"X shape after encoding: {X.shape}")
+            
+            # Load model and get predictions
+            model = UniversalModelLoader.load(model_record.file_path)
+            logger.info(f"Model loaded: {type(model).__name__}, wrapper type: {model.model_type}")
+            
+            # Feature matching
+            model_obj = model._model if hasattr(model, '_model') else model
+            if hasattr(model_obj, 'n_features_in_'):
+                expected_features = model_obj.n_features_in_
+                logger.info(f"Model expects {expected_features} features")
                 
-                # Try to match features if model has feature names
-                if hasattr(model_obj, 'feature_names_in_'):
-                    model_features = list(model_obj.feature_names_in_)
-                    logger.info(f"Model expects features: {model_features}")
-                    
-                    # Ensure we have all required features
-                    missing_features = set(model_features) - set(X.columns)
-                    if missing_features:
-                        raise ValueError(
-                            f"Dataset is missing features required by model: {missing_features}"
-                        )
-                    
-                    # Select and order features to match model
-                    X = X[model_features]
-                    logger.info(f"Selected {len(model_features)} features matching model: {list(X.columns)}")
-                else:
-                    # No feature names available, use first N features
+                if X.shape[1] != expected_features:
+                    if hasattr(model_obj, 'feature_names_in_'):
+                        model_features = list(model_obj.feature_names_in_)
+                        logger.info(f"Model expects features: {model_features}")
+                        missing_features = set(model_features) - set(X.columns)
+                        if missing_features:
+                            raise ValueError(f"Dataset is missing features: {missing_features}")
+                        X = X[model_features]
+                    else:
+                        logger.warning(f"Using first {expected_features} features")
+                        X = X.iloc[:, :expected_features]
+            
+            logger.info(f"Final X shape before prediction: {X.shape}")
+            
+            # Get predictions - use these as both y_true and y_pred
+            y_pred = model.predict(X.values)
+            y_true = y_pred.copy()  # Use predictions as "truth" for fairness comparison
+            
+            logger.info("ℹ️ MODE: Prediction-only fairness analysis")
+            logger.info(f"Predictions distribution: {np.unique(y_pred, return_counts=True)}")
+            logger.info("ℹ️ Fairness metrics will compare prediction consistency across groups")
+            
+        else:
+            # Normal mode with ground truth
+            logger.info(f"✓ TARGET COLUMN PROVIDED: {target_column}")
+            logger.info("✓ MODE: Standard fairness analysis with ground truth comparison")
+            
+            # Prepare data
+            X = df.drop(columns=[target_column])
+            y_true_raw = df[target_column]
+            sensitive = df[sensitive_feature].values
+            
+            # Encode target column to binary (0/1)
+            if y_true_raw.dtype == 'object' or y_true_raw.dtype.name == 'category':
+                logger.info(f"Target column unique values: {y_true_raw.unique()}")
+                y_true = (y_true_raw.astype(str).str.contains('>|high|yes|true|1|approved', case=False, regex=True)).astype(int)
+                logger.info(f"Encoded target to binary: {dict(zip(y_true_raw.unique(), [y_true[y_true_raw == val].iloc[0] if len(y_true[y_true_raw == val]) > 0 else None for val in y_true_raw.unique()]))}")
+            else:
+                y_true = y_true_raw.values
+            
+            logger.info(f"Features before encoding: {list(X.columns)}")
+            logger.info(f"X shape before encoding: {X.shape}")
+            
+            # Handle non-numeric features
+            for col in X.select_dtypes(include=['object']).columns:
+                X[col] = pd.factorize(X[col])[0]
+            
+            logger.info(f"X shape after encoding: {X.shape}")
+            
+            # Load model
+            model = UniversalModelLoader.load(model_record.file_path)
+            logger.info(f"Model loaded: {type(model).__name__}, wrapper type: {model.model_type}")
+            
+            # Check if model has specific feature requirements
+            model_obj = model._model if hasattr(model, '_model') else model
+            if hasattr(model_obj, 'n_features_in_'):
+                expected_features = model_obj.n_features_in_
+                logger.info(f"Model expects {expected_features} features")
+                
+                if X.shape[1] != expected_features:
                     logger.warning(
-                        f"Model has no feature_names_in_, using first {expected_features} features"
+                        f"Feature mismatch: model expects {expected_features} features, "
+                        f"but dataset has {X.shape[1]} features after dropping target."
+                    )
+                    
+                    # Try to match features if model has feature names
+                    if hasattr(model_obj, 'feature_names_in_'):
+                        model_features = list(model_obj.feature_names_in_)
+                        logger.info(f"Model expects features: {model_features}")
+                        
+                        # Ensure we have all required features
+                        missing_features = set(model_features) - set(X.columns)
+                        if missing_features:
+                            raise ValueError(
+                                f"Dataset is missing features required by model: {missing_features}"
+                            )
+                        
+                        # Select and order features to match model
+                        X = X[model_features]
+                        logger.info(f"Selected {len(model_features)} features matching model: {list(X.columns)}")
+                    else:
+                        # No feature names available, use first N features
+                        logger.warning(
+                            f"Model has no feature_names_in_, using first {expected_features} features"
                     )
                     original_cols = list(X.columns)
                     X = X.iloc[:, :expected_features]
                     logger.info(f"Selected first {expected_features} features: {list(X.columns)} (from {original_cols})")
-        else:
-            logger.info("Model has no n_features_in_ attribute, using all features")
-        
-        logger.info(f"Final X shape before prediction: {X.shape}")
-        
-        if progress_callback:
-            progress_callback(50, "Running predictions")
-        validation.progress = 50
-        await db.commit()
-        
-        # Get predictions
-        y_pred = model.predict(X.values)
+            else:
+                logger.info("Model has no n_features_in_ attribute, using all features")
+            
+            logger.info(f"Final X shape before prediction: {X.shape}")
+            
+            if progress_callback:
+                progress_callback(50, "Running predictions")
+            validation.progress = 50
+            await db.commit()
+            
+            # Get predictions (only in normal mode, already done in prediction-only mode)
+            y_pred = model.predict(X.values)
         
         # Ensure predictions are binary (0 or 1) for fairness metrics
         logger.info(f"Raw predictions - unique values: {np.unique(y_pred)}, dtype: {y_pred.dtype}")

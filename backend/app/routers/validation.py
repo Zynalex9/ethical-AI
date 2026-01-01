@@ -35,14 +35,14 @@ class FairnessValidationRequest(BaseModel):
     model_id: UUID
     dataset_id: UUID
     sensitive_feature: str
-    target_column: str
+    target_column: Optional[str] = None  # Optional - if not provided, uses predictions
     thresholds: Optional[Dict[str, float]] = None
 
 
 class TransparencyValidationRequest(BaseModel):
     model_id: UUID
     dataset_id: UUID
-    target_column: str
+    target_column: Optional[str] = None  # Optional
     sample_size: int = 100  # Number of samples for SHAP
 
 
