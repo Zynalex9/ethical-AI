@@ -765,18 +765,29 @@ async def get_suite_results(
     - MLflow run IDs for accountability
     """
     from ..models.validation_suite import ValidationSuite
+    from sqlalchemy.orm import selectinload
     
-    # Get validation suite
+    # Get validation suite with eager loading of relationships
     result = await db.execute(
-        select(ValidationSuite).where(ValidationSuite.id == suite_id)
+        select(ValidationSuite)
+        .options(selectinload(ValidationSuite.model))  # Eager load the model relationship
+        .where(ValidationSuite.id == suite_id)
     )
     suite = result.scalar_one_or_none()
     
     if not suite:
         raise HTTPException(status_code=404, detail="Validation suite not found")
     
-    # Verify access
-    if not await verify_access(db, current_user, suite.model.project_id):
+    # Verify access - Get the model to check project_id
+    result = await db.execute(
+        select(MLModel).where(MLModel.id == suite.model_id)
+    )
+    model = result.scalar_one_or_none()
+    
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    if not await verify_access(db, current_user, model.project_id):
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Build response

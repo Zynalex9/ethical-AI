@@ -249,8 +249,13 @@ def run_fairness_validation_task(
                 
                 raise
     
-    # Run async function
-    return asyncio.run(_run())
+    # Run async function using asyncio event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
 
 
 @celery_app.task(bind=True, name="run_transparency_validation_task")
@@ -417,7 +422,13 @@ def run_transparency_validation_task(
                 
                 raise
     
-    return asyncio.run(_run())
+    # Run async function using asyncio event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
 
 
 @celery_app.task(bind=True, name="run_privacy_validation_task")
@@ -580,7 +591,13 @@ def run_privacy_validation_task(
                 
                 raise
     
-    return asyncio.run(_run())
+    # Run async function using asyncio event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
 
 
 @celery_app.task(bind=True, name="run_all_validations_task")
@@ -608,7 +625,19 @@ def run_all_validations_task(
     import asyncio
     from app.models.validation_suite import ValidationSuite
     
+    # Helper to wait for Celery task in async context
+    async def wait_for_task(task_result, timeout=300):
+        """Wait for a Celery task result in async context."""
+        import time
+        start = time.time()
+        while not task_result.ready():
+            if time.time() - start > timeout:
+                raise TimeoutError(f"Task timed out after {timeout} seconds")
+            await asyncio.sleep(1)  # Check every second
+        return task_result.result
+    
     async def _run():
+        suite = None
         async with async_session_maker() as db:
             try:
                 # Get validation suite
@@ -635,13 +664,15 @@ def run_all_validations_task(
                 await db.commit()
                 await db.refresh(fairness_validation)
                 
-                fairness_result = run_fairness_validation_task(
+                # Run fairness validation using Celery delay
+                fairness_task = run_fairness_validation_task.delay(
                     validation_id=str(fairness_validation.id),
                     model_id=model_id,
                     dataset_id=dataset_id,
                     user_id=user_id,
                     **fairness_config
                 )
+                fairness_result = await wait_for_task(fairness_task)
                 results["validations"]["fairness"] = fairness_result
                 
                 # 2. Transparency Validation
@@ -657,13 +688,15 @@ def run_all_validations_task(
                 await db.commit()
                 await db.refresh(transparency_validation)
                 
-                transparency_result = run_transparency_validation_task(
+                # Run transparency validation using Celery delay
+                transparency_task = run_transparency_validation_task.delay(
                     validation_id=str(transparency_validation.id),
                     model_id=model_id,
                     dataset_id=dataset_id,
                     user_id=user_id,
                     **transparency_config
                 )
+                transparency_result = await wait_for_task(transparency_task)
                 results["validations"]["transparency"] = transparency_result
                 
                 # 3. Privacy Validation
@@ -678,12 +711,14 @@ def run_all_validations_task(
                 await db.commit()
                 await db.refresh(privacy_validation)
                 
-                privacy_result = run_privacy_validation_task(
+                # Run privacy validation using Celery delay
+                privacy_task = run_privacy_validation_task.delay(
                     validation_id=str(privacy_validation.id),
                     dataset_id=dataset_id,
                     user_id=user_id,
                     **privacy_config
                 )
+                privacy_result = await wait_for_task(privacy_task)
                 results["validations"]["privacy"] = privacy_result
                 
                 # Update suite
@@ -710,10 +745,17 @@ def run_all_validations_task(
                 
             except Exception as e:
                 # Update suite on error
-                suite.status = "failed"
-                suite.error_message = str(e)
-                suite.completed_at = datetime.now(timezone.utc)
-                await db.commit()
+                if suite is not None:
+                    suite.status = "failed"
+                    suite.error_message = str(e)
+                    suite.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
                 raise
     
-    return asyncio.run(_run())
+    # Run async function using asyncio event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
