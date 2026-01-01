@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     Box,
     Container,
@@ -35,6 +35,8 @@ import { modelsApi, datasetsApi, validationApi } from '../services/api';
 export default function ValidationPage() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const viewSuiteId = searchParams.get('suite');
 
     // Form state
     const [selectedModel, setSelectedModel] = useState('');
@@ -52,6 +54,24 @@ export default function ValidationPage() {
     const [progress, setProgress] = useState(0);
     const [currentStep, setCurrentStep] = useState('');
     const [results, setResults] = useState<any>(null);
+
+    // Load existing validation results if suite ID is provided
+    useEffect(() => {
+        if (viewSuiteId) {
+            loadSuiteResults(viewSuiteId);
+        }
+    }, [viewSuiteId]);
+
+    const loadSuiteResults = async (suite_id: string) => {
+        try {
+            const suiteResults = await validationApi.getSuiteResults(suite_id);
+            setResults(suiteResults);
+            setSuiteId(suite_id);
+        } catch (err: any) {
+            console.error('Error loading suite results:', err);
+            setError(err.message || 'Failed to load validation results');
+        }
+    };
 
     // Fetch models and datasets
     const { data: models } = useQuery({
@@ -380,11 +400,37 @@ export default function ValidationPage() {
                                                 />
                                             </Box>
                                         </Box>
-                                        <Typography variant="body2" color="text.secondary">
+                                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                                             Progress: {results.validations.fairness.progress}%
                                         </Typography>
+                                        
+                                        {/* Display detailed metrics if available */}
+                                        {results.validations.fairness.results && results.validations.fairness.results.length > 0 && (
+                                            <Box sx={{ mt: 2 }}>
+                                                <Typography variant="subtitle2" sx={{ mb: 1 }}>Metrics:</Typography>
+                                                {results.validations.fairness.results.map((metric: any, idx: number) => (
+                                                    <Box key={idx} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                                        <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
+                                                            {metric.metric_name.replace(/_/g, ' ')}
+                                                        </Typography>
+                                                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                                            <Typography variant="caption" color="text.secondary">
+                                                                {metric.metric_value?.toFixed(3)} / {metric.threshold}
+                                                            </Typography>
+                                                            <Chip
+                                                                label={metric.passed ? '✓' : '✗'}
+                                                                color={metric.passed ? 'success' : 'error'}
+                                                                size="small"
+                                                                sx={{ minWidth: 30, height: 20 }}
+                                                            />
+                                                        </Box>
+                                                    </Box>
+                                                ))}
+                                            </Box>
+                                        )}
+                                        
                                         {results.validations.fairness.mlflow_run_id && (
-                                            <Typography variant="caption" color="text.secondary">
+                                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
                                                 MLflow Run: {results.validations.fairness.mlflow_run_id.substring(0, 8)}...
                                             </Typography>
                                         )}

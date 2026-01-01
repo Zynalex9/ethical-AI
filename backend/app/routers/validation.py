@@ -550,35 +550,81 @@ async def get_validation_history(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get validation history for a project."""
+    """Get validation history for a project, including suite information."""
     if not await verify_access(db, current_user, project_id):
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Get validations for models in this project
+    from ..models.validation_suite import ValidationSuite
+    from sqlalchemy.orm import selectinload
+    
+    # Get validation suites for models in this project
     result = await db.execute(
-        select(Validation)
-        .join(MLModel, Validation.model_id == MLModel.id, isouter=True)
-        .join(Dataset, Validation.dataset_id == Dataset.id, isouter=True)
-        .where(
-            (MLModel.project_id == project_id) | (Dataset.project_id == project_id)
+        select(ValidationSuite)
+        .join(MLModel, ValidationSuite.model_id == MLModel.id)
+        .options(
+            selectinload(ValidationSuite.model),
+            selectinload(ValidationSuite.dataset)
         )
-        .order_by(Validation.started_at.desc())
+        .where(MLModel.project_id == project_id)
+        .order_by(ValidationSuite.started_at.desc())
         .limit(limit)
     )
-    validations = result.scalars().all()
+    suites = result.scalars().all()
     
-    return [
-        {
-            "id": v.id,
-            "status": v.status.value,
-            "progress": v.progress,
-            "started_at": v.started_at,
-            "completed_at": v.completed_at,
-            "model_id": v.model_id,
-            "dataset_id": v.dataset_id
-        }
-        for v in validations
-    ]
+    history = []
+    for suite in suites:
+        # Count results for each validation
+        fairness_results = []
+        transparency_results = []
+        privacy_results = []
+        
+        if suite.fairness_validation_id:
+            results_query = await db.execute(
+                select(ValidationResult).where(ValidationResult.validation_id == suite.fairness_validation_id)
+            )
+            fairness_results = results_query.scalars().all()
+        
+        if suite.transparency_validation_id:
+            results_query = await db.execute(
+                select(ValidationResult).where(ValidationResult.validation_id == suite.transparency_validation_id)
+            )
+            transparency_results = results_query.scalars().all()
+            
+        if suite.privacy_validation_id:
+            results_query = await db.execute(
+                select(ValidationResult).where(ValidationResult.validation_id == suite.privacy_validation_id)
+            )
+            privacy_results = results_query.scalars().all()
+        
+        history.append({
+            "suite_id": str(suite.id),
+            "model_name": suite.model.name if suite.model else "Unknown",
+            "dataset_name": suite.dataset.name if suite.dataset else "Unknown",
+            "status": suite.status,
+            "overall_passed": suite.overall_passed,
+            "started_at": suite.started_at.isoformat() if suite.started_at else None,
+            "completed_at": suite.completed_at.isoformat() if suite.completed_at else None,
+            "error_message": suite.error_message,
+            "validations": {
+                "fairness": {
+                    "completed": suite.fairness_validation_id is not None,
+                    "metrics_count": len(fairness_results),
+                    "passed_count": sum(1 for r in fairness_results if r.passed)
+                },
+                "transparency": {
+                    "completed": suite.transparency_validation_id is not None,
+                    "metrics_count": len(transparency_results),
+                    "passed_count": sum(1 for r in transparency_results if r.passed)
+                },
+                "privacy": {
+                    "completed": suite.privacy_validation_id is not None,
+                    "metrics_count": len(privacy_results),
+                    "passed_count": sum(1 for r in privacy_results if r.passed)
+                }
+            }
+        })
+    
+    return history
 class AllValidationsRequest(BaseModel):
     """Request to run all 4 validations in sequence."""
     model_id: UUID
@@ -795,8 +841,8 @@ async def get_suite_results(
         "suite_id": str(suite.id),
         "status": suite.status,
         "overall_passed": suite.overall_passed,
-        "started_at": suite.started_at,
-        "completed_at": suite.completed_at,
+        "started_at": suite.started_at.isoformat() if suite.started_at else None,
+        "completed_at": suite.completed_at.isoformat() if suite.completed_at else None,
         "error_message": suite.error_message,
         "validations": {}
     }
@@ -808,12 +854,28 @@ async def get_suite_results(
         )
         fairness_val = result.scalar_one_or_none()
         if fairness_val:
+            # Get detailed results
+            results_query = await db.execute(
+                select(ValidationResult).where(ValidationResult.validation_id == fairness_val.id)
+            )
+            validation_results = results_query.scalars().all()
+            
             response["validations"]["fairness"] = {
                 "validation_id": str(fairness_val.id),
-                "status": fairness_val.status.value,
+                "status": fairness_val.status if isinstance(fairness_val.status, str) else fairness_val.status.value,
                 "progress": fairness_val.progress,
                 "mlflow_run_id": fairness_val.mlflow_run_id,
-                "completed_at": fairness_val.completed_at
+                "completed_at": fairness_val.completed_at.isoformat() if fairness_val.completed_at else None,
+                "results": [
+                    {
+                        "metric_name": r.metric_name,
+                        "metric_value": r.metric_value,
+                        "threshold": r.threshold,
+                        "passed": r.passed,
+                        "details": r.details
+                    }
+                    for r in validation_results
+                ]
             }
     
     # Get transparency validation
@@ -825,10 +887,10 @@ async def get_suite_results(
         if transparency_val:
             response["validations"]["transparency"] = {
                 "validation_id": str(transparency_val.id),
-                "status": transparency_val.status.value,
+                "status": transparency_val.status if isinstance(transparency_val.status, str) else transparency_val.status.value,
                 "progress": transparency_val.progress,
                 "mlflow_run_id": transparency_val.mlflow_run_id,
-                "completed_at": transparency_val.completed_at
+                "completed_at": transparency_val.completed_at.isoformat() if transparency_val.completed_at else None
             }
     
     # Get privacy validation
@@ -840,10 +902,10 @@ async def get_suite_results(
         if privacy_val:
             response["validations"]["privacy"] = {
                 "validation_id": str(privacy_val.id),
-                "status": privacy_val.status.value,
+                "status": privacy_val.status if isinstance(privacy_val.status, str) else privacy_val.status.value,
                 "progress": privacy_val.progress,
                 "mlflow_run_id": privacy_val.mlflow_run_id,
-                "completed_at": privacy_val.completed_at
+                "completed_at": privacy_val.completed_at.isoformat() if privacy_val.completed_at else None
             }
     
     return response

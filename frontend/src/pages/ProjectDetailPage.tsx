@@ -38,7 +38,7 @@ import {
     Assessment as ValidationIcon,
 } from '@mui/icons-material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { projectsApi, modelsApi, datasetsApi } from '../services/api';
+import { projectsApi, modelsApi, datasetsApi, validationApi } from '../services/api';
 
 interface TabPanelProps {
     children?: React.ReactNode;
@@ -172,6 +172,13 @@ export default function ProjectDetailPage() {
         queryKey: ['datasets', id],
         queryFn: () => datasetsApi.list(id!),
         enabled: !!id,
+    });
+
+    // Fetch validation history
+    const { data: validationHistory, isLoading: validationsLoading } = useQuery({
+        queryKey: ['validations', id],
+        queryFn: () => validationApi.getHistory(id!),
+        enabled: !!id && tab === 2,
     });
 
     // Upload model
@@ -469,22 +476,119 @@ export default function ProjectDetailPage() {
 
             {/* Validations Tab */}
             <TabPanel value={tab} index={2}>
-                <Card>
-                    <CardContent sx={{ textAlign: 'center', py: 6 }}>
-                        <ValidationIcon sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
-                        <Typography variant="h6" color="text.secondary">
-                            Run a validation to see results here
-                        </Typography>
-                        <Button
-                            variant="contained"
-                            startIcon={<RunIcon />}
-                            sx={{ mt: 2 }}
-                            onClick={() => navigate(`/projects/${id}/validate`)}
-                        >
-                            Run Validation
-                        </Button>
-                    </CardContent>
-                </Card>
+                {validationsLoading ? (
+                    <CircularProgress />
+                ) : validationHistory?.length === 0 ? (
+                    <Card>
+                        <CardContent sx={{ textAlign: 'center', py: 6 }}>
+                            <ValidationIcon sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
+                            <Typography variant="h6" color="text.secondary">
+                                No validations run yet
+                            </Typography>
+                            <Button
+                                variant="contained"
+                                startIcon={<RunIcon />}
+                                sx={{ mt: 2 }}
+                                onClick={() => navigate(`/projects/${id}/validate`)}
+                            >
+                                Run First Validation
+                            </Button>
+                        </CardContent>
+                    </Card>
+                ) : (
+                    <>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                            <Typography variant="h6">Validation History</Typography>
+                            <Button
+                                variant="contained"
+                                startIcon={<RunIcon />}
+                                onClick={() => navigate(`/projects/${id}/validate`)}
+                            >
+                                Run New Validation
+                            </Button>
+                        </Box>
+                        
+                        <TableContainer component={Card}>
+                            <Table>
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>Date</TableCell>
+                                        <TableCell>Model</TableCell>
+                                        <TableCell>Dataset</TableCell>
+                                        <TableCell>Status</TableCell>
+                                        <TableCell>Fairness</TableCell>
+                                        <TableCell>Transparency</TableCell>
+                                        <TableCell>Privacy</TableCell>
+                                        <TableCell align="right">Actions</TableCell>
+                                    </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                    {validationHistory?.map((validation: any) => (
+                                        <TableRow key={validation.suite_id}>
+                                            <TableCell>
+                                                {new Date(validation.started_at).toLocaleDateString()}
+                                                <br />
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {new Date(validation.started_at).toLocaleTimeString()}
+                                                </Typography>
+                                            </TableCell>
+                                            <TableCell>{validation.model_name}</TableCell>
+                                            <TableCell>{validation.dataset_name}</TableCell>
+                                            <TableCell>
+                                                <Chip
+                                                    label={validation.overall_passed ? 'PASSED' : 'FAILED'}
+                                                    color={validation.overall_passed ? 'success' : 'error'}
+                                                    size="small"
+                                                />
+                                            </TableCell>
+                                            <TableCell>
+                                                {validation.validations.fairness.completed ? (
+                                                    <Chip
+                                                        label={`${validation.validations.fairness.passed_count}/${validation.validations.fairness.metrics_count}`}
+                                                        color={validation.validations.fairness.passed_count === validation.validations.fairness.metrics_count ? 'success' : 'warning'}
+                                                        size="small"
+                                                    />
+                                                ) : (
+                                                    <Chip label="N/A" size="small" variant="outlined" />
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                {validation.validations.transparency.completed ? (
+                                                    <Chip
+                                                        label={`${validation.validations.transparency.passed_count}/${validation.validations.transparency.metrics_count}`}
+                                                        color={validation.validations.transparency.passed_count === validation.validations.transparency.metrics_count ? 'success' : 'warning'}
+                                                        size="small"
+                                                    />
+                                                ) : (
+                                                    <Chip label="N/A" size="small" variant="outlined" />
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                {validation.validations.privacy.completed ? (
+                                                    <Chip
+                                                        label={`${validation.validations.privacy.passed_count}/${validation.validations.privacy.metrics_count}`}
+                                                        color={validation.validations.privacy.passed_count === validation.validations.privacy.metrics_count ? 'success' : 'warning'}
+                                                        size="small"
+                                                    />
+                                                ) : (
+                                                    <Chip label="N/A" size="small" variant="outlined" />
+                                                )}
+                                            </TableCell>
+                                            <TableCell align="right">
+                                                <Button
+                                                    size="small"
+                                                    onClick={() => navigate(`/projects/${id}/validate?suite=${validation.suite_id}`)}
+                                                >
+                                                    View Details
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    </>
+                )}
             </TabPanel>
 
             {/* Upload Model Dialog */}
