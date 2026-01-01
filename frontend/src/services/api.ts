@@ -169,11 +169,11 @@ export const validationApi = {
         dataset_id: string;
         fairness_config: {
             sensitive_feature: string;
-            target_column: string;
+            target_column: string | null;
             thresholds?: Record<string, number>;
         };
         transparency_config: {
-            target_column: string;
+            target_column: string | null;
             sample_size?: number;
         };
         privacy_config: {

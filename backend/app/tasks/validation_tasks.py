@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 
 from app.celery_app import celery_app
 from app.config import settings
-from app.models.validation import Validation, ValidationStatus
+from app.models.validation import Validation, ValidationStatus, ValidationResult
 from app.models.ml_model import MLModel
 from app.models.dataset import Dataset
 from app.models.audit_log import AuditLog, AuditAction, ResourceType
@@ -323,6 +323,30 @@ async def _run_fairness_validation_async(
             progress_callback(90, "Saving results")
         validation.progress = 90
         await db.commit()
+        
+        # Save ValidationResult records to database for each metric
+        logger.info("Saving validation results to database...")
+        for metric in report.metrics:
+            result_record = ValidationResult(
+                validation_id=UUID(validation_id),
+                principle="fairness",
+                metric_name=metric.metric_name,
+                metric_value=float(metric.overall_value) if metric.overall_value is not None else None,
+                threshold=float(metric.threshold) if metric.threshold is not None else None,
+                passed=bool(metric.passed),
+                details={
+                    "by_group": _convert_to_json_serializable(metric.by_group),
+                    "description": metric.description
+                }
+            )
+            db.add(result_record)
+        await db.commit()
+        logger.info(f"Saved {len(report.metrics)} validation results to database")
+        
+        # Log summary
+        passed_count = sum(1 for m in report.metrics if m.passed)
+        total_count = len(report.metrics)
+        logger.info(f"Fairness validation complete. Passed: {passed_count}/{total_count} metrics. Overall: {'PASSED' if report.overall_passed else 'FAILED'}")
         
         # Update validation status
         validation.status = ValidationStatus.COMPLETED
