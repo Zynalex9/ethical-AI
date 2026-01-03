@@ -1,6 +1,7 @@
 # Validation router - Run validations via API
 
 import os
+import logging
 from typing import List, Optional, Dict, Any
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from ..validators.fairness_validator import FairnessValidator
 from ..validators.explainability_engine import ExplainabilityEngine
 from ..validators.privacy_validator import PrivacyValidator
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/validate", tags=["validation"])
 
 
@@ -1053,9 +1055,11 @@ async def get_transparency_details(
         
         model_card_path = os.path.join(artifact_base, "model_card.json")
         feature_importance_path = os.path.join(artifact_base, "feature_importance.json")
+        sample_predictions_path = os.path.join(artifact_base, "sample_predictions.json")
         
         model_card = None
         feature_importance = {}
+        sample_predictions = []
         
         if os.path.exists(model_card_path):
             with open(model_card_path, 'r') as f:
@@ -1064,6 +1068,14 @@ async def get_transparency_details(
         if os.path.exists(feature_importance_path):
             with open(feature_importance_path, 'r') as f:
                 feature_importance = json.load(f)
+        
+        if os.path.exists(sample_predictions_path):
+            with open(sample_predictions_path, 'r') as f:
+                sample_data = json.load(f)
+                sample_predictions = sample_data.get("samples", [])
+                logger.info(f"Loaded {len(sample_predictions)} sample predictions from {sample_predictions_path}")
+        else:
+            logger.warning(f"Sample predictions file not found: {sample_predictions_path}")
         
         if not model_card and not feature_importance:
             raise HTTPException(status_code=404, detail="Transparency artifacts not found")
@@ -1083,6 +1095,7 @@ async def get_transparency_details(
             "mlflow_run_id": transparency_val.mlflow_run_id,
             "feature_importance": feature_importance,
             "model_card": model_card or {},
+            "sample_predictions": sample_predictions,
             "completed_at": transparency_val.completed_at.isoformat() if transparency_val.completed_at else None
         }
     

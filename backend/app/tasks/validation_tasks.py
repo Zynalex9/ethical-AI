@@ -598,6 +598,56 @@ async def _run_transparency_validation_async(
         tracker.log_metrics(importance_dict)
         tracker.log_dict(model_card, "model_card.json")
         
+        # Generate sample local explanations (Phase 2)
+        sample_predictions = []
+        num_samples = min(5, len(X_sample))  # Get 5 example predictions
+        sample_indices = np.random.choice(len(X_sample), num_samples, replace=False).tolist()
+        
+        try:
+            # Get local explanations for all samples at once
+            local_explanations = engine.explain_local_shap(X_sample, instance_indices=sample_indices)
+            
+            for local_exp in local_explanations:
+                idx = local_exp.instance_index
+                y_true = int(y_sample[idx])
+                
+                # Get feature contributions from the LocalExplanation
+                contributions = {}
+                for feature_name, shap_value in local_exp.feature_contributions.items():
+                    feature_idx = feature_names.index(feature_name) if feature_name in feature_names else -1
+                    if feature_idx >= 0:
+                        contributions[feature_name] = {
+                            "value": float(X_sample[idx][feature_idx]),
+                            "shap_contribution": float(shap_value)
+                        }
+                
+                # Sort by absolute contribution and take top 5
+                sorted_contributions = sorted(
+                    contributions.items(),
+                    key=lambda x: abs(x[1]["shap_contribution"]),
+                    reverse=True
+                )[:5]
+                
+                sample_predictions.append({
+                    "sample_index": int(idx),
+                    "true_label": y_true,
+                    "predicted_label": int(local_exp.prediction),
+                    "correct": bool(y_true == local_exp.prediction),
+                    "top_features": {k: v for k, v in sorted_contributions},
+                    "base_value": float(local_exp.base_value)
+                })
+            
+            logger.info(f"Generated {len(sample_predictions)} sample local explanations")
+        except Exception as e:
+            logger.error(f"Failed to generate sample local explanations: {str(e)}", exc_info=True)
+        
+        # Save sample predictions
+        if sample_predictions:
+            tracker.log_dict({"samples": sample_predictions}, "sample_predictions.json")
+            logger.info(f"Saved {len(sample_predictions)} sample predictions to MLflow")
+        else:
+            logger.warning("No sample predictions were generated")
+        
         if progress_callback:
             progress_callback(90, "Saving results")
         validation.progress = 90

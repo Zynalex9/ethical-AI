@@ -59,6 +59,17 @@ interface TransparencyData {
     mlflow_run_id: string;
     feature_importance: FeatureImportance;
     model_card: ModelCard;
+    sample_predictions: Array<{
+        sample_index: number;
+        true_label: number;
+        predicted_label: number;
+        correct: boolean;
+        top_features: Record<string, {
+            value: number;
+            shap_contribution: number;
+        }>;
+        base_value: number;
+    }>;
     completed_at: string;
 }
 
@@ -97,6 +108,10 @@ export default function TransparencyDetailPage() {
     // Check if we have the required data
     const hasFeatureImportance = transparencyData.feature_importance && Object.keys(transparencyData.feature_importance).length > 0;
     const hasModelCard = transparencyData.model_card && transparencyData.model_card.performance_metrics;
+
+    // Debug: Log sample predictions
+    console.log('Sample predictions data:', transparencyData.sample_predictions);
+    console.log('Sample predictions length:', transparencyData.sample_predictions?.length);
 
     if (!hasFeatureImportance && !hasModelCard) {
         return (
@@ -409,6 +424,134 @@ export default function TransparencyDetailPage() {
                 </CardContent>
             </Card>
             )}
-        </Box>
-    );
-}
+
+            {/* Sample Predictions Card */}
+            {transparencyData.sample_predictions && transparencyData.sample_predictions.length > 0 && (
+                <Card sx={{ mt: 3 }}>
+                    <CardContent>
+                        <Box display="flex" alignItems="center" gap={1} mb={3}>
+                            <Assessment color="primary" />
+                            <Typography variant="h6">Sample Predictions with Explanations</Typography>
+                        </Box>
+
+                        <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
+                            Below are {transparencyData.sample_predictions.length} example predictions showing how specific features 
+                            contributed to each decision. Positive values push toward one class, negative toward the other.
+                        </Typography>
+
+                        <Box display="flex" flexDirection="column" gap={2}>
+                            {transparencyData.sample_predictions.map((sample, idx) => {
+                                const featureEntries = Object.entries(sample.top_features);
+                                const maxAbsContribution = Math.max(
+                                    ...featureEntries.map(([_, data]) => Math.abs(data.shap_contribution))
+                                );
+
+                                return (
+                                    <Card key={idx} variant="outlined" sx={{ 
+                                        bgcolor: sample.correct ? 'success.50' : 'error.50',
+                                        borderColor: sample.correct ? 'success.main' : 'error.main',
+                                        borderWidth: 2
+                                    }}>
+                                        <CardContent>
+                                            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                                                <Box>
+                                                    <Typography variant="subtitle1" fontWeight="bold">
+                                                        Sample #{sample.sample_index}
+                                                    </Typography>
+                                                    <Box display="flex" gap={1} mt={1}>
+                                                        <Chip 
+                                                            label={`Predicted: ${sample.predicted_label}`}
+                                                            color="primary"
+                                                            size="small"
+                                                        />
+                                                        <Chip 
+                                                            label={`Actual: ${sample.true_label}`}
+                                                            color="default"
+                                                            size="small"
+                                                        />
+                                                    </Box>
+                                                </Box>
+                                                <Chip 
+                                                    label={sample.correct ? 'Correct' : 'Incorrect'}
+                                                    color={sample.correct ? 'success' : 'error'}
+                                                    sx={{ fontWeight: 'bold' }}
+                                                />
+                                            </Box>
+
+                                            <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
+                                                Base prediction value: {sample.base_value.toFixed(3)}
+                                            </Typography>
+
+                                            <Typography variant="subtitle2" gutterBottom>
+                                                Top Contributing Features:
+                                            </Typography>
+
+                                            <Box display="flex" flexDirection="column" gap={1.5} mt={1}>
+                                                {featureEntries.map(([featureName, data]) => {
+                                                    const isPositive = data.shap_contribution > 0;
+                                                    const barWidth = (Math.abs(data.shap_contribution) / maxAbsContribution) * 100;
+
+                                                    return (
+                                                        <Box key={featureName}>
+                                                            <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.5}>
+                                                                <Typography variant="body2" fontWeight="medium">
+                                                                    {featureName}
+                                                                </Typography>
+                                                                <Typography variant="caption" color="text.secondary">
+                                                                    Value: {typeof data.value === 'number' ? data.value.toFixed(2) : data.value}
+                                                                </Typography>
+                                                            </Box>
+                                                            <Box display="flex" alignItems="center" gap={1}>
+                                                                <Box flex={1} position="relative">
+                                                                    <LinearProgress 
+                                                                        variant="determinate" 
+                                                                        value={barWidth}
+                                                                        sx={{
+                                                                            height: 8,
+                                                                            borderRadius: 1,
+                                                                            bgcolor: 'grey.200',
+                                                                            '& .MuiLinearProgress-bar': {
+                                                                                bgcolor: isPositive ? 'success.main' : 'error.main',
+                                                                                borderRadius: 1
+                                                                            }
+                                                                        }}
+                                                                    />
+                                                                </Box>
+                                                                <Typography 
+                                                                    variant="body2" 
+                                                                    fontWeight="bold"
+                                                                    color={isPositive ? 'success.main' : 'error.main'}
+                                                                    sx={{ minWidth: 60, textAlign: 'right' }}
+                                                                >
+                                                                    {isPositive ? '+' : ''}{data.shap_contribution.toFixed(3)}
+                                                                </Typography>
+                                                            </Box>
+                                                        </Box>
+                                                    );
+                                                })}
+                                            </Box>
+                                        </CardContent>
+                                    </Card>
+                                );
+                            })}
+                        </Box>
+                    </CardContent>
+                </Card>
+            )}
+
+                        {/* Debug Section - Remove after testing */}
+                        <Card sx={{ mt: 3, bgcolor: 'grey.100' }}>
+                            <CardContent>
+                                <Typography variant="h6" gutterBottom>Debug Info</Typography>
+                                <Typography variant="caption" component="pre" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                                    {JSON.stringify({
+                                        hasSamplePredictions: !!transparencyData.sample_predictions,
+                                        samplePredictionsLength: transparencyData.sample_predictions?.length || 0,
+                                        samplePredictionsData: transparencyData.sample_predictions
+                                    }, null, 2)}
+                                </Typography>
+                            </CardContent>
+                        </Card>
+                    </Box>
+                );
+            }
