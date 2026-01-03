@@ -544,11 +544,52 @@ export default function ValidationPage() {
                                                     />
                                                 </Box>
                                             </Box>
-                                            <Typography variant="body2" color="text.secondary">
-                                                Progress: {results.validations.transparency.progress}%
+                                            
+                                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                                Progress: 100%
                                             </Typography>
+
+                                            {/* Feature Importance */}
+                                            {results.validations.transparency.global_importance && (
+                                                <Box sx={{ mt: 2 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
+                                                        Top Feature Importances:
+                                                    </Typography>
+                                                    {Object.entries(results.validations.transparency.global_importance)
+                                                        .sort(([, a]: any, [, b]: any) => b - a)
+                                                        .slice(0, 5)
+                                                        .map(([feature, importance]: any) => (
+                                                            <Box key={feature} sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                                                <Typography variant="caption">{feature}:</Typography>
+                                                                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
+                                                                    {(importance * 100).toFixed(2)}%
+                                                                </Typography>
+                                                            </Box>
+                                                        ))}
+                                                </Box>
+                                            )}
+
+                                            {/* Model Card Metrics */}
+                                            {results.validations.transparency.model_card?.performance_metrics && (
+                                                <Box sx={{ mt: 2 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
+                                                        Model Performance:
+                                                    </Typography>
+                                                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                                                        {Object.entries(results.validations.transparency.model_card.performance_metrics).map(([metric, value]: any) => (
+                                                            <Chip
+                                                                key={metric}
+                                                                label={`${metric}: ${(value * 100).toFixed(1)}%`}
+                                                                size="small"
+                                                                variant="outlined"
+                                                            />
+                                                        ))}
+                                                    </Box>
+                                                </Box>
+                                            )}
+
                                             {results.validations.transparency.mlflow_run_id && (
-                                                <Typography variant="caption" color="text.secondary">
+                                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
                                                     MLflow Run: {results.validations.transparency.mlflow_run_id.substring(0, 8)}...
                                                 </Typography>
                                             )}
@@ -572,14 +613,98 @@ export default function ValidationPage() {
                                                     />
                                                 </Box>
                                             </Box>
-                                            <Typography variant="body2" color="text.secondary">
-                                                Progress: {results.validations.privacy.progress}%
+                                            
+                                            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                                Progress: 100%
                                             </Typography>
+
+                                            {/* PII Detection */}
+                                            {results.validations.privacy.pii_detected && (
+                                                <Box sx={{ mt: 2 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
+                                                        PII Detection:
+                                                    </Typography>
+                                                    <Typography variant="body2" color={results.validations.privacy.pii_detected.length > 0 ? 'error' : 'success'}>
+                                                        {results.validations.privacy.pii_detected.length > 0 
+                                                            ? `⚠️ ${results.validations.privacy.pii_detected.length} column(s) with PII detected`
+                                                            : '✓ No PII detected'}
+                                                    </Typography>
+                                                    {results.validations.privacy.pii_detected.length > 0 && (
+                                                        <Box sx={{ mt: 1, pl: 2 }}>
+                                                            {results.validations.privacy.pii_detected.map((pii: any, idx: number) => (
+                                                                <Typography key={idx} variant="caption" sx={{ display: 'block' }}>
+                                                                    • {pii.column_name}: {pii.pii_type} ({(pii.confidence * 100).toFixed(0)}%)
+                                                                </Typography>
+                                                            ))}
+                                                        </Box>
+                                                    )}
+                                                </Box>
+                                            )}
+
+                                            {/* k-Anonymity */}
+                                            {results.validations.privacy.k_anonymity && (
+                                                <Box sx={{ mt: 2 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
+                                                        k-Anonymity (k={results.validations.privacy.k_anonymity.k_value}):
+                                                    </Typography>
+                                                    <Chip
+                                                        label={results.validations.privacy.k_anonymity.satisfies_k ? 'PASSED' : 'FAILED'}
+                                                        color={results.validations.privacy.k_anonymity.satisfies_k ? 'success' : 'error'}
+                                                        size="small"
+                                                        sx={{ mb: 1 }}
+                                                    />
+                                                    {!results.validations.privacy.k_anonymity.satisfies_k && (
+                                                        <Typography variant="caption" sx={{ display: 'block' }}>
+                                                            Min group size: {results.validations.privacy.k_anonymity.actual_min_k}<br />
+                                                            Violating groups: {results.validations.privacy.k_anonymity.violating_groups_count}
+                                                        </Typography>
+                                                    )}
+                                                </Box>
+                                            )}
+
+                                            {/* l-Diversity */}
+                                            {results.validations.privacy.l_diversity && (
+                                                <Box sx={{ mt: 2 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
+                                                        l-Diversity (l={results.validations.privacy.l_diversity.l_value}):
+                                                    </Typography>
+                                                    <Chip
+                                                        label={results.validations.privacy.l_diversity.satisfies_l ? 'PASSED' : 'FAILED'}
+                                                        color={results.validations.privacy.l_diversity.satisfies_l ? 'success' : 'error'}
+                                                        size="small"
+                                                        sx={{ mb: 1 }}
+                                                    />
+                                                    {!results.validations.privacy.l_diversity.satisfies_l && (
+                                                        <Typography variant="caption" sx={{ display: 'block' }}>
+                                                            Sensitive: {results.validations.privacy.l_diversity.sensitive_attribute}<br />
+                                                            Violating groups: {results.validations.privacy.l_diversity.violating_groups_count}
+                                                        </Typography>
+                                                    )}
+                                                </Box>
+                                            )}
+
+                                            {/* Overall Status */}
+                                            <Box sx={{ mt: 2, p: 1, bgcolor: results.validations.privacy.overall_passed ? 'success.light' : 'error.light', borderRadius: 1 }}>
+                                                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                                                    {results.validations.privacy.overall_passed ? '✓ Privacy Validated' : '⚠️ Privacy Issues Found'}
+                                                </Typography>
+                                            </Box>
+
                                             {results.validations.privacy.mlflow_run_id && (
-                                                <Typography variant="caption" color="text.secondary">
+                                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
                                                     MLflow Run: {results.validations.privacy.mlflow_run_id.substring(0, 8)}...
                                                 </Typography>
                                             )}
+
+                                            <Button
+                                                variant="outlined"
+                                                color="primary"
+                                                fullWidth
+                                                sx={{ mt: 2 }}
+                                                onClick={() => navigate(`/validations/${results.suite_id}/privacy`)}
+                                            >
+                                                View Detailed Privacy Report
+                                            </Button>
                                         </CardContent>
                                     </Card>
                                 </Box>

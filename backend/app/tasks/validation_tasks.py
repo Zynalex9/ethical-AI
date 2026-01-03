@@ -473,6 +473,345 @@ def run_fairness_validation_task(
         loop.close()
 
 
+async def _run_transparency_validation_async(
+    db: AsyncSession,
+    validation_id: str,
+    model_id: str,
+    dataset_id: str,
+    target_column: str,
+    sample_size: int = 100,
+    user_id: Optional[str] = None,
+    progress_callback=None
+) -> Dict[str, Any]:
+    """Core transparency validation logic (async)."""
+    try:
+        if progress_callback:
+            progress_callback(10, "Loading model")
+        
+        # Get validation record
+        result = await db.execute(
+            select(Validation).where(Validation.id == UUID(validation_id))
+        )
+        validation = result.scalar_one()
+        validation.status = ValidationStatus.RUNNING
+        validation.progress = 10
+        await db.commit()
+        
+        # Get model and dataset
+        result = await db.execute(
+            select(MLModel).where(MLModel.id == UUID(model_id))
+        )
+        model_record = result.scalar_one()
+        
+        result = await db.execute(
+            select(Dataset).where(Dataset.id == UUID(dataset_id))
+        )
+        dataset_record = result.scalar_one()
+        
+        # Initialize accountability tracker
+        tracker = AccountabilityTracker(
+            tracking_uri=settings.mlflow_tracking_uri,
+            experiment_name=settings.mlflow_experiment_name,
+            use_mlflow=True
+        )
+        
+        tracker.start_validation_run(
+            model_name=model_record.name,
+            model_id=model_id,
+            dataset_name=dataset_record.name,
+            dataset_id=dataset_id,
+            requirement_name="Transparency Validation",
+            requirement_id=validation_id,
+            principle="transparency",
+            user_id=user_id
+        )
+        
+        if progress_callback:
+            progress_callback(30, "Loading data")
+        validation.progress = 30
+        await db.commit()
+        
+        # Load model and dataset
+        model = UniversalModelLoader.load(model_record.file_path)
+        df = pd.read_csv(dataset_record.file_path)
+        
+        # Prepare data
+        X = df.drop(columns=[target_column])
+        y = df[target_column]
+        feature_names = X.columns.tolist()
+        
+        for col in X.select_dtypes(include=['object']).columns:
+            X[col] = pd.factorize(X[col])[0]
+        
+        # Encode target if it's categorical
+        if y.dtype == 'object':
+            y, _ = pd.factorize(y)
+        
+        X_values = X.values
+        y_values = np.array(y)
+        
+        if progress_callback:
+            progress_callback(50, "Sampling data")
+        validation.progress = 50
+        await db.commit()
+        
+        # Sample for performance
+        sample_size = min(sample_size, len(X_values))
+        indices = np.random.choice(len(X_values), sample_size, replace=False)
+        X_sample = X_values[indices]
+        y_sample = y_values[indices]
+        
+        if progress_callback:
+            progress_callback(70, "Computing SHAP values")
+        validation.progress = 70
+        await db.commit()
+        
+        # Initialize explainability engine
+        engine = ExplainabilityEngine(
+            model=model,
+            X_train=X_sample,
+            feature_names=feature_names
+        )
+        
+        # Get global explanations
+        global_exp = engine.explain_global_shap(X_sample)
+        
+        # Generate model card with proper parameters
+        additional_info = {
+            "model_name": model_record.name,
+            "model_version": model_record.version,
+            "intended_use": "Classification",
+            "training_data_description": f"{dataset_record.name} ({dataset_record.row_count} samples)",
+            "evaluation_data_description": f"{sample_size} samples"
+        }
+        model_card = engine.generate_model_card(
+            X_test=X_sample,
+            y_test=y_sample,
+            additional_info=additional_info
+        )
+        
+        # Log to MLflow
+        importance_dict = {
+            fi.feature_name: fi.importance
+            for fi in global_exp.feature_importances
+        }
+        tracker.log_metrics(importance_dict)
+        tracker.log_dict(model_card, "model_card.json")
+        
+        if progress_callback:
+            progress_callback(90, "Saving results")
+        validation.progress = 90
+        await db.commit()
+        
+        # Update validation
+        validation.status = ValidationStatus.COMPLETED
+        validation.progress = 100
+        validation.completed_at = datetime.now(timezone.utc)
+        validation.mlflow_run_id = tracker._current_run.info.run_id if tracker._current_run else None
+        await db.commit()
+        
+        tracker.end_validation_run(status="passed")
+        
+        # Audit log
+        if user_id:
+            audit = AuditLog(
+                user_id=UUID(user_id),
+                action=AuditAction.VALIDATION_RUN,
+                resource_type=ResourceType.VALIDATION,
+                resource_id=UUID(validation_id),
+                details={
+                    "validation_type": "transparency",
+                    "model_name": model_record.name,
+                    "sample_size": sample_size
+                }
+            )
+            db.add(audit)
+            await db.commit()
+        
+        return {
+            "validation_id": validation_id,
+            "status": "completed",
+            "global_importance": importance_dict,
+            "model_card": model_card,
+            "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
+        }
+        
+    except Exception as e:
+        validation.status = ValidationStatus.FAILED
+        validation.error_message = str(e)
+        validation.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        
+        try:
+            tracker.end_validation_run(status="error", error_message=str(e))
+        except:
+            pass
+        
+        raise
+
+
+async def _run_privacy_validation_async(
+    db: AsyncSession,
+    validation_id: str,
+    dataset_id: str,
+    k_anonymity_k: int = 5,
+    l_diversity_l: int = 2,
+    quasi_identifiers: Optional[list] = None,
+    sensitive_attribute: Optional[str] = None,
+    user_id: Optional[str] = None,
+    progress_callback=None
+) -> Dict[str, Any]:
+    """Core privacy validation logic (async)."""
+    try:
+        if progress_callback:
+            progress_callback(10, "Loading dataset")
+        
+        # Get validation record
+        result = await db.execute(
+            select(Validation).where(Validation.id == UUID(validation_id))
+        )
+        validation = result.scalar_one()
+        validation.status = ValidationStatus.RUNNING
+        validation.progress = 10
+        await db.commit()
+        
+        # Get dataset
+        result = await db.execute(
+            select(Dataset).where(Dataset.id == UUID(dataset_id))
+        )
+        dataset_record = result.scalar_one()
+        
+        # Initialize accountability tracker
+        tracker = AccountabilityTracker(
+            tracking_uri=settings.mlflow_tracking_uri,
+            experiment_name=settings.mlflow_experiment_name,
+            use_mlflow=True
+        )
+        
+        tracker.start_validation_run(
+            model_name="N/A",
+            model_id="N/A",
+            dataset_name=dataset_record.name,
+            dataset_id=dataset_id,
+            requirement_name="Privacy Validation",
+            requirement_id=validation_id,
+            principle="privacy",
+            user_id=user_id
+        )
+        
+        if progress_callback:
+            progress_callback(30, "Loading data")
+        validation.progress = 30
+        await db.commit()
+        
+        # Load dataset
+        df = pd.read_csv(dataset_record.file_path)
+        
+        if progress_callback:
+            progress_callback(50, "Detecting PII")
+        validation.progress = 50
+        await db.commit()
+        
+        # Initialize privacy validator
+        validator = PrivacyValidator(df)
+        
+        # Build requirements
+        requirements = {'pii_detection': True}
+        
+        if quasi_identifiers:
+            requirements['k_anonymity'] = {
+                'k': k_anonymity_k,
+                'quasi_identifiers': quasi_identifiers
+            }
+            
+            if sensitive_attribute:
+                requirements['l_diversity'] = {
+                    'l': l_diversity_l,
+                    'quasi_identifiers': quasi_identifiers,
+                    'sensitive_attribute': sensitive_attribute
+                }
+        
+        if progress_callback:
+            progress_callback(70, "Running privacy checks")
+        validation.progress = 70
+        await db.commit()
+        
+        # Run validation
+        report = validator.validate(requirements)
+        
+        # Log to MLflow
+        metrics = {
+            "pii_detected_count": len([r for r in report.pii_results if r.is_pii]),
+            "overall_passed": 1.0 if report.overall_passed else 0.0
+        }
+        if report.k_anonymity:
+            metrics["k_anonymity_satisfied"] = 1.0 if report.k_anonymity.satisfies_k else 0.0
+        if report.l_diversity:
+            metrics["l_diversity_satisfied"] = 1.0 if report.l_diversity.satisfies_l else 0.0
+        
+        tracker.log_metrics(metrics)
+        tracker.log_dict(report.to_dict(), "privacy_report.json")
+        
+        if progress_callback:
+            progress_callback(90, "Saving results")
+        validation.progress = 90
+        await db.commit()
+        
+        # Update validation
+        validation.status = ValidationStatus.COMPLETED
+        validation.progress = 100
+        validation.completed_at = datetime.now(timezone.utc)
+        validation.mlflow_run_id = tracker._current_run.info.run_id if tracker._current_run else None
+        await db.commit()
+        
+        tracker.end_validation_run(
+            status="passed" if report.overall_passed else "failed"
+        )
+        
+        # Audit log
+        if user_id:
+            audit = AuditLog(
+                user_id=UUID(user_id),
+                action=AuditAction.VALIDATION_RUN,
+                resource_type=ResourceType.VALIDATION,
+                resource_id=UUID(validation_id),
+                details={
+                    "validation_type": "privacy",
+                    "dataset_name": dataset_record.name,
+                    "passed": report.overall_passed
+                }
+            )
+            db.add(audit)
+            await db.commit()
+        
+        # Format response
+        pii_list = [r.to_dict() for r in report.pii_results if r.is_pii]
+        
+        return {
+            "validation_id": validation_id,
+            "status": "completed",
+            "overall_passed": report.overall_passed,
+            "pii_detected": pii_list,
+            "k_anonymity": report.k_anonymity.to_dict() if report.k_anonymity else None,
+            "l_diversity": report.l_diversity.to_dict() if report.l_diversity else None,
+            "recommendations": report.recommendations,
+            "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
+        }
+        
+    except Exception as e:
+        validation.status = ValidationStatus.FAILED
+        validation.error_message = str(e)
+        validation.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        
+        try:
+            tracker.end_validation_run(status="error", error_message=str(e))
+        except:
+            pass
+        
+        raise
+
+
 @celery_app.task(bind=True, name="run_transparency_validation_task")
 def run_transparency_validation_task(
     self,
@@ -486,156 +825,21 @@ def run_transparency_validation_task(
     """Run transparency/explainability validation in background."""
     import asyncio
     
+    def progress_callback(progress, step):
+        self.update_state(state="PROGRESS", meta={"progress": progress, "step": step})
+    
     async def _run():
         async with async_session_maker() as db:
-            try:
-                self.update_state(state="PROGRESS", meta={"progress": 10, "step": "Loading model"})
-                
-                # Get validation record
-                result = await db.execute(
-                    select(Validation).where(Validation.id == UUID(validation_id))
-                )
-                validation = result.scalar_one()
-                validation.status = ValidationStatus.RUNNING
-                validation.progress = 10
-                await db.commit()
-                
-                # Get model and dataset
-                result = await db.execute(
-                    select(MLModel).where(MLModel.id == UUID(model_id))
-                )
-                model_record = result.scalar_one()
-                
-                result = await db.execute(
-                    select(Dataset).where(Dataset.id == UUID(dataset_id))
-                )
-                dataset_record = result.scalar_one()
-                
-                # Initialize accountability tracker
-                tracker = AccountabilityTracker(
-                    tracking_uri=settings.mlflow_tracking_uri,
-                    experiment_name=settings.mlflow_experiment_name,
-                    use_mlflow=True
-                )
-                
-                tracker.start_validation_run(
-                    model_name=model_record.name,
-                    model_id=model_id,
-                    dataset_name=dataset_record.name,
-                    dataset_id=dataset_id,
-                    requirement_name="Transparency Validation",
-                    requirement_id=validation_id,
-                    principle="transparency",
-                    user_id=user_id
-                )
-                
-                self.update_state(state="PROGRESS", meta={"progress": 30, "step": "Loading data"})
-                validation.progress = 30
-                await db.commit()
-                
-                # Load model and dataset
-                model = UniversalModelLoader.load(model_record.file_path)
-                df = pd.read_csv(dataset_record.file_path)
-                
-                # Prepare data
-                X = df.drop(columns=[target_column])
-                feature_names = X.columns.tolist()
-                
-                for col in X.select_dtypes(include=['object']).columns:
-                    X[col] = pd.factorize(X[col])[0]
-                
-                X_values = X.values
-                
-                self.update_state(state="PROGRESS", meta={"progress": 50, "step": "Sampling data"})
-                validation.progress = 50
-                await db.commit()
-                
-                # Sample for performance
-                sample_size = min(sample_size, len(X_values))
-                indices = np.random.choice(len(X_values), sample_size, replace=False)
-                X_sample = X_values[indices]
-                
-                self.update_state(state="PROGRESS", meta={"progress": 70, "step": "Computing SHAP values"})
-                validation.progress = 70
-                await db.commit()
-                
-                # Initialize explainability engine
-                engine = ExplainabilityEngine(
-                    model=model,
-                    X_train=X_sample,
-                    feature_names=feature_names
-                )
-                
-                # Get global explanations
-                global_exp = engine.explain_global_shap(X_sample)
-                
-                # Generate model card
-                model_card = engine.generate_model_card(
-                    model_name=model_record.name,
-                    model_version=model_record.version,
-                    intended_use="Classification",
-                    training_data=f"{dataset_record.name} ({dataset_record.row_count} samples)",
-                    evaluation_data=f"{sample_size} samples",
-                    performance_metrics={}
-                )
-                
-                # Log to MLflow
-                importance_dict = {
-                    fi.feature_name: fi.importance
-                    for fi in global_exp.feature_importance
-                }
-                tracker.log_metrics(importance_dict)
-                tracker.log_dict(model_card.to_dict(), "model_card.json")
-                
-                self.update_state(state="PROGRESS", meta={"progress": 90, "step": "Saving results"})
-                validation.progress = 90
-                await db.commit()
-                
-                # Update validation
-                validation.status = ValidationStatus.COMPLETED
-                validation.progress = 100
-                validation.completed_at = datetime.now(timezone.utc)
-                validation.mlflow_run_id = tracker._current_run.info.run_id if tracker._current_run else None
-                await db.commit()
-                
-                tracker.end_validation_run(status="passed")
-                
-                # Audit log
-                if user_id:
-                    audit = AuditLog(
-                        user_id=UUID(user_id),
-                        action=AuditAction.VALIDATION_RUN,
-                        resource_type=ResourceType.VALIDATION,
-                        resource_id=UUID(validation_id),
-                        details={
-                            "validation_type": "transparency",
-                            "model_name": model_record.name,
-                            "sample_size": sample_size
-                        }
-                    )
-                    db.add(audit)
-                    await db.commit()
-                
-                return {
-                    "validation_id": validation_id,
-                    "status": "completed",
-                    "global_importance": importance_dict,
-                    "model_card": model_card.to_dict(),
-                    "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
-                }
-                
-            except Exception as e:
-                validation.status = ValidationStatus.FAILED
-                validation.error_message = str(e)
-                validation.completed_at = datetime.now(timezone.utc)
-                await db.commit()
-                
-                try:
-                    tracker.end_validation_run(status="error", error_message=str(e))
-                except:
-                    pass
-                
-                raise
+            return await _run_transparency_validation_async(
+                db=db,
+                validation_id=validation_id,
+                model_id=model_id,
+                dataset_id=dataset_id,
+                target_column=target_column,
+                sample_size=sample_size,
+                user_id=user_id,
+                progress_callback=progress_callback
+            )
     
     # Run async function using asyncio event loop
     loop = asyncio.new_event_loop()
@@ -660,151 +864,22 @@ def run_privacy_validation_task(
     """Run privacy validation in background."""
     import asyncio
     
+    def progress_callback(progress, step):
+        self.update_state(state="PROGRESS", meta={"progress": progress, "step": step})
+    
     async def _run():
         async with async_session_maker() as db:
-            try:
-                self.update_state(state="PROGRESS", meta={"progress": 10, "step": "Loading dataset"})
-                
-                # Get validation record
-                result = await db.execute(
-                    select(Validation).where(Validation.id == UUID(validation_id))
-                )
-                validation = result.scalar_one()
-                validation.status = ValidationStatus.RUNNING
-                validation.progress = 10
-                await db.commit()
-                
-                # Get dataset
-                result = await db.execute(
-                    select(Dataset).where(Dataset.id == UUID(dataset_id))
-                )
-                dataset_record = result.scalar_one()
-                
-                # Initialize accountability tracker
-                tracker = AccountabilityTracker(
-                    tracking_uri=settings.mlflow_tracking_uri,
-                    experiment_name=settings.mlflow_experiment_name,
-                    use_mlflow=True
-                )
-                
-                tracker.start_validation_run(
-                    model_name="N/A",
-                    model_id="N/A",
-                    dataset_name=dataset_record.name,
-                    dataset_id=dataset_id,
-                    requirement_name="Privacy Validation",
-                    requirement_id=validation_id,
-                    principle="privacy",
-                    user_id=user_id
-                )
-                
-                self.update_state(state="PROGRESS", meta={"progress": 30, "step": "Loading data"})
-                validation.progress = 30
-                await db.commit()
-                
-                # Load dataset
-                df = pd.read_csv(dataset_record.file_path)
-                
-                self.update_state(state="PROGRESS", meta={"progress": 50, "step": "Detecting PII"})
-                validation.progress = 50
-                await db.commit()
-                
-                # Initialize privacy validator
-                validator = PrivacyValidator(df)
-                
-                # Build requirements
-                requirements = {'pii_detection': True}
-                
-                if quasi_identifiers:
-                    requirements['k_anonymity'] = {
-                        'k': k_anonymity_k,
-                        'quasi_identifiers': quasi_identifiers
-                    }
-                    
-                    if sensitive_attribute:
-                        requirements['l_diversity'] = {
-                            'l': l_diversity_l,
-                            'quasi_identifiers': quasi_identifiers,
-                            'sensitive_attribute': sensitive_attribute
-                        }
-                
-                self.update_state(state="PROGRESS", meta={"progress": 70, "step": "Running privacy checks"})
-                validation.progress = 70
-                await db.commit()
-                
-                # Run validation
-                report = validator.validate(requirements)
-                
-                # Log to MLflow
-                metrics = {
-                    "pii_detected_count": len([r for r in report.pii_results if r.is_pii]),
-                    "overall_passed": 1.0 if report.overall_passed else 0.0
-                }
-                if report.k_anonymity:
-                    metrics["k_anonymity_satisfied"] = 1.0 if report.k_anonymity.satisfies_k else 0.0
-                if report.l_diversity:
-                    metrics["l_diversity_satisfied"] = 1.0 if report.l_diversity.satisfies_l else 0.0
-                
-                tracker.log_metrics(metrics)
-                tracker.log_dict(report.to_dict(), "privacy_report.json")
-                
-                self.update_state(state="PROGRESS", meta={"progress": 90, "step": "Saving results"})
-                validation.progress = 90
-                await db.commit()
-                
-                # Update validation
-                validation.status = ValidationStatus.COMPLETED
-                validation.progress = 100
-                validation.completed_at = datetime.now(timezone.utc)
-                validation.mlflow_run_id = tracker._current_run.info.run_id if tracker._current_run else None
-                await db.commit()
-                
-                tracker.end_validation_run(
-                    status="passed" if report.overall_passed else "failed"
-                )
-                
-                # Audit log
-                if user_id:
-                    audit = AuditLog(
-                        user_id=UUID(user_id),
-                        action=AuditAction.VALIDATION_RUN,
-                        resource_type=ResourceType.VALIDATION,
-                        resource_id=UUID(validation_id),
-                        details={
-                            "validation_type": "privacy",
-                            "dataset_name": dataset_record.name,
-                            "passed": report.overall_passed
-                        }
-                    )
-                    db.add(audit)
-                    await db.commit()
-                
-                # Format response
-                pii_list = [r.to_dict() for r in report.pii_results if r.is_pii]
-                
-                return {
-                    "validation_id": validation_id,
-                    "status": "completed",
-                    "overall_passed": report.overall_passed,
-                    "pii_detected": pii_list,
-                    "k_anonymity": report.k_anonymity.to_dict() if report.k_anonymity else None,
-                    "l_diversity": report.l_diversity.to_dict() if report.l_diversity else None,
-                    "recommendations": report.recommendations,
-                    "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
-                }
-                
-            except Exception as e:
-                validation.status = ValidationStatus.FAILED
-                validation.error_message = str(e)
-                validation.completed_at = datetime.now(timezone.utc)
-                await db.commit()
-                
-                try:
-                    tracker.end_validation_run(status="error", error_message=str(e))
-                except:
-                    pass
-                
-                raise
+            return await _run_privacy_validation_async(
+                db=db,
+                validation_id=validation_id,
+                dataset_id=dataset_id,
+                k_anonymity_k=k_anonymity_k,
+                l_diversity_l=l_diversity_l,
+                quasi_identifiers=quasi_identifiers,
+                sensitive_attribute=sensitive_attribute,
+                user_id=user_id,
+                progress_callback=progress_callback
+            )
     
     # Run async function using asyncio event loop
     loop = asyncio.new_event_loop()
@@ -827,13 +902,13 @@ def run_all_validations_task(
     user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Run all 4 validations in sequence.
+    Run all validations in sequence.
     
     This is the main orchestrator task that runs:
     1. Fairness validation
     2. Transparency validation
     3. Privacy validation
-    4. Accountability (tracked via MLflow)
+    4. Accountability (tracked via MLflow in each validation)
     
     Returns aggregate results.
     """
@@ -855,8 +930,8 @@ def run_all_validations_task(
                     "validations": {}
                 }
                 
-                # 1. Fairness Validation
-                self.update_state(state="PROGRESS", meta={"progress": 10, "step": "Fairness validation"})
+                # 1. Fairness Validation (0-33%)
+                self.update_state(state="PROGRESS", meta={"progress": 0, "step": "Starting fairness validation"})
                 
                 fairness_validation = Validation(
                     model_id=UUID(model_id),
@@ -868,39 +943,104 @@ def run_all_validations_task(
                 await db.commit()
                 await db.refresh(fairness_validation)
                 
-                # Run fairness validation directly (not via .delay())
+                # Run fairness validation directly
                 fairness_result = await _run_fairness_validation_async(
                     db=db,
                     validation_id=str(fairness_validation.id),
                     model_id=model_id,
                     dataset_id=dataset_id,
                     user_id=user_id,
-                    progress_callback=lambda p, s: self.update_state(state="PROGRESS", meta={"progress": 10 + p//4, "step": f"Fairness: {s}"}),
+                    progress_callback=lambda p, s: self.update_state(
+                        state="PROGRESS", 
+                        meta={"progress": int(p * 0.33), "step": f"Fairness: {s}"}
+                    ),
                     **fairness_config
                 )
                 results["validations"]["fairness"] = fairness_result
                 
-                # For now, only fairness validation is fully functional
-                # TODO: Fix transparency and privacy to work in orchestrator
-                self.update_state(state="PROGRESS", meta={"progress": 95, "step": "Finalizing"})
+                # 2. Transparency Validation (33-66%)
+                self.update_state(state="PROGRESS", meta={"progress": 33, "step": "Starting transparency validation"})
                 
-                # Calculate overall pass/fail (based on fairness only for now)
-                overall_passed = fairness_result.get("overall_passed", False)
+                transparency_validation = Validation(
+                    model_id=UUID(model_id),
+                    dataset_id=UUID(dataset_id),
+                    status=ValidationStatus.PENDING,
+                    progress=0
+                )
+                db.add(transparency_validation)
+                await db.commit()
+                await db.refresh(transparency_validation)
                 
+                # Run transparency validation
+                transparency_result = await _run_transparency_validation_async(
+                    db=db,
+                    validation_id=str(transparency_validation.id),
+                    model_id=model_id,
+                    dataset_id=dataset_id,
+                    user_id=user_id,
+                    progress_callback=lambda p, s: self.update_state(
+                        state="PROGRESS",
+                        meta={"progress": 33 + int(p * 0.33), "step": f"Transparency: {s}"}
+                    ),
+                    **transparency_config
+                )
+                results["validations"]["transparency"] = transparency_result
+                
+                # 3. Privacy Validation (66-100%)
+                self.update_state(state="PROGRESS", meta={"progress": 66, "step": "Starting privacy validation"})
+                
+                privacy_validation = Validation(
+                    model_id=UUID(model_id) if model_id else None,
+                    dataset_id=UUID(dataset_id),
+                    status=ValidationStatus.PENDING,
+                    progress=0
+                )
+                db.add(privacy_validation)
+                await db.commit()
+                await db.refresh(privacy_validation)
+                
+                # Run privacy validation
+                privacy_result = await _run_privacy_validation_async(
+                    db=db,
+                    validation_id=str(privacy_validation.id),
+                    dataset_id=dataset_id,
+                    user_id=user_id,
+                    progress_callback=lambda p, s: self.update_state(
+                        state="PROGRESS",
+                        meta={"progress": 66 + int(p * 0.33), "step": f"Privacy: {s}"}
+                    ),
+                    **privacy_config
+                )
+                results["validations"]["privacy"] = privacy_result
+                
+                # 4. Calculate overall results
+                self.update_state(state="PROGRESS", meta={"progress": 95, "step": "Finalizing results"})
+                
+                # Calculate overall pass/fail
+                overall_passed = (
+                    fairness_result.get("overall_passed", False) and
+                    transparency_result.get("status") == "completed" and
+                    privacy_result.get("overall_passed", False)
+                )
+                
+                # Update suite
                 suite.status = "completed"
                 suite.overall_passed = overall_passed
                 suite.fairness_validation_id = fairness_validation.id
-                # suite.transparency_validation_id = None  # TODO
-                # suite.privacy_validation_id = None  # TODO
+                suite.transparency_validation_id = transparency_validation.id
+                suite.privacy_validation_id = privacy_validation.id
                 suite.completed_at = datetime.now(timezone.utc)
                 await db.commit()
                 
                 results["overall_passed"] = overall_passed
                 results["status"] = "completed"
                 
+                self.update_state(state="PROGRESS", meta={"progress": 100, "step": "Complete"})
+                
                 return results
                 
             except Exception as e:
+                logger.error(f"Validation suite failed: {str(e)}")
                 # Update suite on error
                 if suite is not None:
                     suite.status = "failed"

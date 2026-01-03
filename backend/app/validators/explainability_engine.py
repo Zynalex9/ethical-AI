@@ -253,12 +253,26 @@ class ExplainabilityEngine:
         # Calculate mean absolute SHAP values per feature
         mean_abs_shap = np.abs(shap_values).mean(axis=0)
         
+        # Ensure mean_abs_shap is 1D array
+        if mean_abs_shap.ndim > 1:
+            # For multi-class or multi-output, take mean across additional dimensions
+            mean_abs_shap = mean_abs_shap.mean(axis=-1)
+        
+        # Flatten to ensure 1D
+        mean_abs_shap = np.atleast_1d(mean_abs_shap).flatten()
+        
         # Create feature importance list
         importances = []
         for i, (name, importance) in enumerate(zip(self.feature_names, mean_abs_shap)):
+            # Convert numpy value to Python float safely
+            if hasattr(importance, 'item'):
+                importance_value = importance.item()
+            else:
+                importance_value = float(importance)
+            
             importances.append(FeatureImportance(
                 feature_name=name,
-                importance=float(importance),
+                importance=importance_value,
                 rank=0  # Will be set after sorting
             ))
         

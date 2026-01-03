@@ -128,7 +128,25 @@ class SklearnModelWrapper(ModelWrapper):
     
     def __init__(self, model: Any):
         self._model = model
+        self._fix_sklearn_compatibility()
         self._validate_model()
+    
+    def _fix_sklearn_compatibility(self) -> None:
+        """Fix compatibility issues with models from different sklearn versions."""
+        from sklearn.linear_model import LogisticRegression
+        
+        # Fix LogisticRegression models missing multi_class attribute (old sklearn versions)
+        if isinstance(self._model, LogisticRegression):
+            if not hasattr(self._model, 'multi_class'):
+                # Default to 'auto' for older models
+                self._model.multi_class = 'auto'
+                logger.info("Added missing 'multi_class' attribute to LogisticRegression model")
+            
+            # Fix other potentially missing attributes
+            if not hasattr(self._model, 'solver'):
+                self._model.solver = 'lbfgs'
+            if not hasattr(self._model, 'max_iter'):
+                self._model.max_iter = 100
     
     def _validate_model(self) -> None:
         """Validate that the model has required methods."""
@@ -142,7 +160,23 @@ class SklearnModelWrapper(ModelWrapper):
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """Generate probability estimates."""
         if hasattr(self._model, 'predict_proba'):
-            return self._model.predict_proba(X)
+            try:
+                return self._model.predict_proba(X)
+            except AttributeError as e:
+                # Handle attribute errors from old model versions
+                logger.warning(f"predict_proba failed with AttributeError: {e}, falling back to decision function")
+                if hasattr(self._model, 'decision_function'):
+                    # Use decision function and convert to probabilities
+                    decision = self._model.decision_function(X)
+                    # Simple sigmoid transformation for binary classification
+                    if decision.ndim == 1:
+                        proba_positive = 1 / (1 + np.exp(-decision))
+                        return np.vstack([1 - proba_positive, proba_positive]).T
+                    else:
+                        # Multi-class: softmax
+                        exp_decision = np.exp(decision - np.max(decision, axis=1, keepdims=True))
+                        return exp_decision / np.sum(exp_decision, axis=1, keepdims=True)
+                raise
         else:
             # Fallback for models without predict_proba (e.g., SVM without probability=True)
             predictions = self.predict(X)

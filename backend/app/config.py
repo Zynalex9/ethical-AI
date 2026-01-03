@@ -55,8 +55,9 @@ class Settings(BaseSettings):
     allowed_dataset_extensions: List[str] = [".csv", ".parquet", ".json"]
     
     # MLflow
-    mlflow_tracking_uri: str = "sqlite:///mlflow.db"
+    mlflow_tracking_uri: str = "sqlite:///./mlflow.db"
     mlflow_experiment_name: str = "ethical-ai-validations"
+    mlflow_artifact_location: str = "./mlruns"  # Artifacts stored in filesystem
     
     # Celery
     celery_broker_url: str = "redis://localhost:6379/0"

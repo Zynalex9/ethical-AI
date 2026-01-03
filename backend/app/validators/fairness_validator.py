@@ -51,13 +51,20 @@ class FairnessMetricResult:
     description: str
     
     def to_dict(self) -> Dict[str, Any]:
+        # Handle nested dict values (e.g., equalized odds has {"tpr": x, "fpr": y})
+        def convert_value(v):
+            if isinstance(v, dict):
+                return {str(k2): float(v2) for k2, v2 in v.items()}
+            else:
+                return float(v)
+        
         return {
-            "metric_name": self.metric_name,
-            "overall_value": self.overall_value,
-            "by_group": self.by_group,
-            "threshold": self.threshold,
-            "passed": self.passed,
-            "description": self.description
+            "metric_name": str(self.metric_name),
+            "overall_value": float(self.overall_value),
+            "by_group": {str(k): convert_value(v) for k, v in self.by_group.items()},
+            "threshold": float(self.threshold),
+            "passed": bool(self.passed),
+            "description": str(self.description)
         }
 
 
@@ -78,17 +85,17 @@ class GroupConfusionMatrix:
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "group_name": self.group_name,
+            "group_name": str(self.group_name),
             "confusion_matrix": {
-                "tn": self.tn, "fp": self.fp,
-                "fn": self.fn, "tp": self.tp
+                "tn": int(self.tn), "fp": int(self.fp),
+                "fn": int(self.fn), "tp": int(self.tp)
             },
-            "accuracy": self.accuracy,
-            "tpr": self.tpr,
-            "fpr": self.fpr,
-            "tnr": self.tnr,
-            "fnr": self.fnr,
-            "precision": self.precision
+            "accuracy": float(self.accuracy),
+            "tpr": float(self.tpr),
+            "fpr": float(self.fpr),
+            "tnr": float(self.tnr),
+            "fnr": float(self.fnr),
+            "precision": float(self.precision)
         }
 
 
@@ -105,12 +112,12 @@ class FairnessReport:
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "sensitive_feature": self.sensitive_feature,
-            "groups": self.groups,
-            "sample_sizes": self.sample_sizes,
+            "sensitive_feature": str(self.sensitive_feature),
+            "groups": [str(g) for g in self.groups],
+            "sample_sizes": {str(k): int(v) for k, v in self.sample_sizes.items()},
             "metrics": [m.to_dict() for m in self.metrics],
             "confusion_matrices": [cm.to_dict() for cm in self.confusion_matrices],
-            "overall_passed": self.overall_passed,
+            "overall_passed": bool(self.overall_passed),
             "visualizations": self.visualizations
         }
 

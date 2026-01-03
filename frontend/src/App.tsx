@@ -15,6 +15,7 @@ import DashboardPage from './pages/DashboardPage';
 import ProjectsPage from './pages/ProjectsPage';
 import ProjectDetailPage from './pages/ProjectDetailPage';
 import ValidationPage from './pages/ValidationPage';
+import PrivacyDetailPage from './pages/PrivacyDetailPage';
 import TemplatesPage from './pages/TemplatesPage';
 import AuditLogPage from './pages/AuditLogPage';
 
@@ -142,6 +143,7 @@ function AppRoutes() {
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="projects/:id/validate" element={<ValidationPage />} />
         <Route path="validations" element={<ValidationPage />} />
+        <Route path="validations/:validationId/privacy" element={<PrivacyDetailPage />} />
         <Route path="templates" element={<TemplatesPage />} />
         <Route path="audit" element={<AuditLogPage />} />
         <Route path="profile" element={<PlaceholderPage title="Profile" />} />

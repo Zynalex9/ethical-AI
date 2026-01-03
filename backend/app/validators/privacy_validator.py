@@ -58,17 +58,19 @@ COMPILED_PII_PATTERNS = {
 }
 
 # Columns that commonly contain PII (by name heuristics)
+# NOTE: These are matched as exact tokens after normalization (removing underscores, hyphens, spaces)
+# to avoid false positives like "relationship" matching "ip"
 PII_COLUMN_NAMES = {
-    'email', 'e-mail', 'mail', 'email_address', 'emailaddress',
-    'phone', 'telephone', 'mobile', 'cell', 'phone_number', 'phonenumber',
-    'ssn', 'social_security', 'social_security_number', 'socialsecurity',
-    'name', 'first_name', 'last_name', 'full_name', 'firstname', 'lastname', 'fullname',
-    'address', 'street', 'street_address', 'home_address', 'homeaddress',
-    'dob', 'date_of_birth', 'birthdate', 'birthday', 'dateofbirth',
-    'credit_card', 'card_number', 'cc_number', 'creditcard',
-    'ip', 'ip_address', 'ipaddress',
-    'passport', 'passport_number', 'passportnumber',
-    'driver_license', 'license_number', 'drivinglicense'
+    'email', 'emails', 'emailaddress', 'emailaddresses',
+    'phone', 'telephone', 'mobile', 'cell', 'phonenumber', 'phonenumbers',
+    'ssn', 'socialsecurity', 'socialsecuritynumber',
+    'firstname', 'lastname', 'fullname', 'middlename',
+    'address', 'street', 'streetaddress', 'homeaddress',
+    'dob', 'dateofbirth', 'birthdate', 'birthday',
+    'creditcard', 'cardnumber', 'ccnumber',
+    'ipaddress', 'ipaddr',  # Changed: removed standalone 'ip' to avoid false positives
+    'passport', 'passportnumber',
+    'driverlicense', 'licensenumber', 'dlnumber'
 }
 
 
@@ -89,13 +91,13 @@ class PIIDetectionResult:
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "column_name": self.column_name,
-            "is_pii": self.is_pii,
-            "pii_type": self.pii_type,
-            "confidence": self.confidence,
-            "sample_matches": self.sample_matches[:3],  # Limit samples
-            "detection_method": self.detection_method,
-            "details": self.details
+            "column_name": str(self.column_name),
+            "is_pii": bool(self.is_pii),  # Convert numpy bool_ to Python bool
+            "pii_type": str(self.pii_type) if self.pii_type else None,
+            "confidence": float(self.confidence),  # Convert numpy float to Python float
+            "sample_matches": [str(s) for s in self.sample_matches[:3]],  # Limit samples
+            "detection_method": str(self.detection_method),
+            "details": str(self.details) if self.details else None
         }
 
 
@@ -112,14 +114,14 @@ class KAnonymityResult:
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "k_value": self.k_value,
-            "satisfies_k": self.satisfies_k,
-            "actual_min_k": self.actual_min_k,
-            "violating_groups_count": len(self.violating_groups),
+            "k_value": int(self.k_value),
+            "satisfies_k": bool(self.satisfies_k),  # Convert numpy bool_ to Python bool
+            "actual_min_k": int(self.actual_min_k),
+            "violating_groups_count": int(len(self.violating_groups)),
             "violating_groups": self.violating_groups[:5],  # Sample
-            "total_groups": self.total_groups,
-            "quasi_identifiers": self.quasi_identifiers,
-            "rows_with_missing_values": self.rows_with_missing_values
+            "total_groups": int(self.total_groups),
+            "quasi_identifiers": [str(qi) for qi in self.quasi_identifiers],
+            "rows_with_missing_values": int(self.rows_with_missing_values)
         }
 
 
@@ -135,12 +137,12 @@ class LDiversityResult:
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "l_value": self.l_value,
-            "satisfies_l": self.satisfies_l,
-            "actual_min_l": self.actual_min_l,
-            "sensitive_attribute": self.sensitive_attribute,
-            "violating_groups_count": len(self.violating_groups),
-            "total_groups": self.total_groups
+            "l_value": int(self.l_value),
+            "satisfies_l": bool(self.satisfies_l),  # Convert numpy bool_ to Python bool
+            "actual_min_l": int(self.actual_min_l),
+            "sensitive_attribute": str(self.sensitive_attribute),
+            "violating_groups_count": int(len(self.violating_groups)),
+            "total_groups": int(self.total_groups)
         }
 
 
@@ -159,9 +161,9 @@ class PrivacyReport:
             "pii_results": [p.to_dict() for p in self.pii_results],
             "k_anonymity": self.k_anonymity.to_dict() if self.k_anonymity else None,
             "l_diversity": self.l_diversity.to_dict() if self.l_diversity else None,
-            "overall_passed": self.overall_passed,
-            "recommendations": self.recommendations,
-            "warnings": self.warnings
+            "overall_passed": bool(self.overall_passed),  # Convert numpy bool_ to Python bool
+            "recommendations": [str(r) for r in self.recommendations],
+            "warnings": [str(w) for w in self.warnings]
         }
 
 

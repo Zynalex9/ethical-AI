@@ -378,7 +378,7 @@ async def run_transparency_validation(
         # Format importance dict
         importance_dict = {
             fi.feature_name: fi.importance
-            for fi in global_exp.feature_importance
+            for fi in global_exp.feature_importances
         }
         
         return TransparencyResultResponse(
@@ -910,3 +910,82 @@ async def get_suite_results(
     
     return response
 
+
+@router.get("/suite/{suite_id}/privacy-details")
+async def get_privacy_details(
+    suite_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get detailed privacy validation results including PII detection,
+    k-anonymity, l-diversity, recommendations, and warnings.
+    """
+    import json
+    import mlflow
+    from ..models.validation_suite import ValidationSuite
+    
+    # Get validation suite
+    result = await db.execute(
+        select(ValidationSuite).where(ValidationSuite.id == suite_id)
+    )
+    suite = result.scalar_one_or_none()
+    
+    if not suite:
+        raise HTTPException(status_code=404, detail="Validation suite not found")
+    
+    # Verify access
+    result = await db.execute(
+        select(MLModel).where(MLModel.id == suite.model_id)
+    )
+    model = result.scalar_one_or_none()
+    
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    if not await verify_access(db, current_user, model.project_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get privacy validation
+    if not suite.privacy_validation_id:
+        raise HTTPException(status_code=404, detail="No privacy validation found for this suite")
+    
+    result = await db.execute(
+        select(Validation).where(Validation.id == suite.privacy_validation_id)
+    )
+    privacy_val = result.scalar_one_or_none()
+    
+    if not privacy_val or not privacy_val.mlflow_run_id:
+        raise HTTPException(status_code=404, detail="Privacy validation not completed or no MLflow run")
+    
+    # Load privacy report from MLflow artifact
+    try:
+        from ..config import settings
+        import os
+        
+        # Try direct file access first (faster and avoids MLflow client issues)
+        artifact_path = os.path.join(
+            settings.mlflow_artifact_location,
+            "1",  # Experiment ID
+            privacy_val.mlflow_run_id,
+            "artifacts",
+            "privacy_report.json"
+        )
+        
+        if os.path.exists(artifact_path):
+            with open(artifact_path, 'r') as f:
+                privacy_data = json.load(f)
+            return privacy_data
+        else:
+            # Fallback to MLflow client
+            mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+            client = mlflow.tracking.MlflowClient()
+            downloaded_path = client.download_artifacts(privacy_val.mlflow_run_id, "privacy_report.json")
+            
+            with open(downloaded_path, 'r') as f:
+                privacy_data = json.load(f)
+            
+            return privacy_data
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load privacy details: {str(e)}")
