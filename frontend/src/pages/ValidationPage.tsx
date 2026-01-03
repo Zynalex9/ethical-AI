@@ -593,6 +593,16 @@ export default function ValidationPage() {
                                                     MLflow Run: {results.validations.transparency.mlflow_run_id.substring(0, 8)}...
                                                 </Typography>
                                             )}
+
+                                            <Button
+                                                variant="outlined"
+                                                color="primary"
+                                                fullWidth
+                                                sx={{ mt: 2 }}
+                                                onClick={() => navigate(`/validations/${results.suite_id}/transparency`)}
+                                            >
+                                                View Detailed Transparency Report
+                                            </Button>
                                         </CardContent>
                                     </Card>
                                 </Box>

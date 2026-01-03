@@ -989,3 +989,104 @@ async def get_privacy_details(
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load privacy details: {str(e)}")
+
+@router.get("/suite/{suite_id}/transparency-details")
+async def get_transparency_details(
+    suite_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get detailed transparency validation results including:
+    - Feature importance (SHAP values)
+    - Model card
+    - Performance metrics
+    """
+    from ..models.validation_suite import ValidationSuite
+    import mlflow
+    import json
+    
+    # Get validation suite
+    result = await db.execute(
+        select(ValidationSuite).where(ValidationSuite.id == suite_id)
+    )
+    suite = result.scalar_one_or_none()
+    
+    if not suite:
+        raise HTTPException(status_code=404, detail="Validation suite not found")
+    
+    # Verify access
+    result = await db.execute(
+        select(MLModel).where(MLModel.id == suite.model_id)
+    )
+    model = result.scalar_one_or_none()
+    
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    if not await verify_access(db, current_user, model.project_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    if not suite.transparency_validation_id:
+        raise HTTPException(status_code=404, detail="No transparency validation found for this suite")
+    
+    result = await db.execute(
+        select(Validation).where(Validation.id == suite.transparency_validation_id)
+    )
+    transparency_val = result.scalar_one_or_none()
+    
+    if not transparency_val or not transparency_val.mlflow_run_id:
+        raise HTTPException(status_code=404, detail="Transparency validation not completed or no MLflow run")
+    
+    # Load transparency data from MLflow artifact
+    try:
+        from ..config import settings
+        import os
+        
+        # Direct file access
+        artifact_base = os.path.join(
+            settings.mlflow_artifact_location,
+            "1",  # Experiment ID
+            transparency_val.mlflow_run_id,
+            "artifacts"
+        )
+        
+        model_card_path = os.path.join(artifact_base, "model_card.json")
+        feature_importance_path = os.path.join(artifact_base, "feature_importance.json")
+        
+        model_card = None
+        feature_importance = {}
+        
+        if os.path.exists(model_card_path):
+            with open(model_card_path, 'r') as f:
+                model_card = json.load(f)
+        
+        if os.path.exists(feature_importance_path):
+            with open(feature_importance_path, 'r') as f:
+                feature_importance = json.load(f)
+        
+        if not model_card and not feature_importance:
+            raise HTTPException(status_code=404, detail="Transparency artifacts not found")
+        
+        # Sort feature importance by value (descending)
+        if feature_importance:
+            sorted_features = sorted(
+                feature_importance.items(),
+                key=lambda x: abs(x[1]),
+                reverse=True
+            )
+            feature_importance = dict(sorted_features)
+        
+        return {
+            "validation_id": str(transparency_val.id),
+            "status": transparency_val.status.value if hasattr(transparency_val.status, 'value') else str(transparency_val.status),
+            "mlflow_run_id": transparency_val.mlflow_run_id,
+            "feature_importance": feature_importance,
+            "model_card": model_card or {},
+            "completed_at": transparency_val.completed_at.isoformat() if transparency_val.completed_at else None
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load transparency details: {str(e)}")

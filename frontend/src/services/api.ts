@@ -205,6 +205,12 @@ export const validationApi = {
         return response.data;
     },
 
+    // Get detailed transparency validation results
+    getTransparencyDetails: async (suiteId: string) => {
+        const response = await api.get(`/validate/suite/${suiteId}/transparency-details`);
+        return response.data;
+    },
+
     // Legacy endpoints (still work for individual validations)
     runFairness: async (modelId: string, datasetId: string, requirementId: string) => {
         const response = await api.post('/validate/fairness', {
