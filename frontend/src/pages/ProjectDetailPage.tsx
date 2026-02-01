@@ -39,6 +39,7 @@ import {
 } from '@mui/icons-material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { projectsApi, modelsApi, datasetsApi, validationApi } from '../services/api';
+import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
 
 interface TabPanelProps {
     children?: React.ReactNode;
@@ -145,6 +146,7 @@ export default function ProjectDetailPage() {
     const [tab, setTab] = useState(0);
     const [uploadModelOpen, setUploadModelOpen] = useState(false);
     const [uploadDatasetOpen, setUploadDatasetOpen] = useState(false);
+    const [benchmarkLoaderOpen, setBenchmarkLoaderOpen] = useState(false);
     const [modelName, setModelName] = useState('');
     const [datasetName, setDatasetName] = useState('');
     const [sensitiveAttrs, setSensitiveAttrs] = useState('');
@@ -392,7 +394,13 @@ export default function ProjectDetailPage() {
 
             {/* Datasets Tab */}
             <TabPanel value={tab} index={1}>
-                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, mb: 2 }}>
+                    <Button
+                        variant="outlined"
+                        onClick={() => setBenchmarkLoaderOpen(true)}
+                    >
+                        Load Benchmark Dataset
+                    </Button>
                     <Button
                         variant="contained"
                         startIcon={<UploadIcon />}
@@ -670,6 +678,17 @@ export default function ProjectDetailPage() {
                     <Button onClick={() => setUploadDatasetOpen(false)}>Cancel</Button>
                 </DialogActions>
             </Dialog>
+
+            {/* Benchmark Dataset Loader */}
+            <BenchmarkDatasetLoader
+                open={benchmarkLoaderOpen}
+                onClose={() => setBenchmarkLoaderOpen(false)}
+                projectId={id!}
+                onSuccess={(datasetName) => {
+                    queryClient.invalidateQueries({ queryKey: ['datasets', id] });
+                    alert(`Successfully loaded ${datasetName} dataset!`);
+                }}
+            />
         </Container>
     );
 }

@@ -368,3 +368,84 @@ async def delete_dataset(
     # Delete record
     await db.delete(dataset)
     await db.commit()
+    
+    return {"message": "Dataset deleted successfully"}
+
+
+@router.post("/project/{project_id}/load-benchmark", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+async def load_benchmark_dataset(
+    project_id: UUID,
+    dataset_key: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Load a pre-configured benchmark dataset into a project.
+    
+    Available datasets:
+    - "compas": COMPAS Recidivism dataset (criminal justice)
+    - "adult_income": Adult Income/Census dataset (employment fairness)
+    - "german_credit": German Credit dataset (financial fairness)
+    
+    Args:
+        project_id: Project to load dataset into
+        dataset_key: Key identifying which benchmark dataset to load
+    
+    Returns:
+        Created dataset with metadata
+    """
+    # Import here to avoid circular imports
+    from ..services.dataset_seeder import BenchmarkDatasetSeeder
+    
+    # Verify project exists and user has access
+    result = await db.execute(
+        select(Project).where(
+            Project.id == project_id,
+            Project.deleted_at.is_(None)
+        )
+    )
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    if current_user.role.value != "admin" and project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Load benchmark dataset
+    try:
+        seeder = BenchmarkDatasetSeeder()
+        dataset = await seeder.seed_benchmark_datasets(
+            project_id=project_id,
+            dataset_key=dataset_key,
+            db=db,
+            user_id=current_user.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=f"Benchmark dataset file not found: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to load benchmark dataset: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to load benchmark dataset")
+    
+    return dataset
+
+
+@router.get("/benchmark/available")
+async def get_available_benchmark_datasets():
+    """
+    Get list of available benchmark datasets with metadata.
+    
+    Returns:
+        Dictionary of available benchmark datasets with their descriptions
+    """
+    from ..services.dataset_seeder import BenchmarkDatasetSeeder
+    
+    seeder = BenchmarkDatasetSeeder()
+    datasets = seeder.get_available_datasets()
+    
+    return {
+        "datasets": datasets,
+        "count": len(datasets)
+    }
