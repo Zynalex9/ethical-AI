@@ -335,10 +335,18 @@ class ExplainabilityEngine:
                 pred_prob = float(pred)
             
             # Create feature contribution dict
-            contributions = {
-                name: float(value)
-                for name, value in zip(self.feature_names, values)
-            }
+            # FIX: Handle cases where SHAP values might be arrays instead of scalars
+            contributions = {}
+            for name, value in zip(self.feature_names, values):
+                try:
+                    # If it's an array, take the first element; otherwise use as-is
+                    if isinstance(value, np.ndarray):
+                        contributions[name] = float(value.item() if value.size == 1 else value[0])
+                    else:
+                        contributions[name] = float(value)
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Could not convert SHAP value for {name}: {e}, using 0.0")
+                    contributions[name] = 0.0
             
             explanations.append(LocalExplanation(
                 instance_index=idx,

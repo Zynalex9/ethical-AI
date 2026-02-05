@@ -1045,13 +1045,20 @@ async def get_transparency_details(
         from ..config import settings
         import os
         
-        # Direct file access
+        # FIX: Use absolute path based on this file's location to avoid working directory issues
+        # Get the backend directory (2 levels up from this file: routers -> app -> backend)
+        backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        mlruns_dir = os.path.join(backend_dir, "mlruns")
+        
+        # Direct file access with absolute path
         artifact_base = os.path.join(
-            settings.mlflow_artifact_location,
+            mlruns_dir,
             "1",  # Experiment ID
             transparency_val.mlflow_run_id,
             "artifacts"
         )
+        
+        logger.info(f"Looking for transparency artifacts in: {artifact_base}")
         
         model_card_path = os.path.join(artifact_base, "model_card.json")
         feature_importance_path = os.path.join(artifact_base, "feature_importance.json")
@@ -1077,8 +1084,21 @@ async def get_transparency_details(
         else:
             logger.warning(f"Sample predictions file not found: {sample_predictions_path}")
         
+        # FIX: Provide better error message showing what artifacts were found vs missing
         if not model_card and not feature_importance:
-            raise HTTPException(status_code=404, detail="Transparency artifacts not found")
+            missing_files = []
+            if not os.path.exists(model_card_path):
+                missing_files.append("model_card.json")
+            if not os.path.exists(feature_importance_path):
+                missing_files.append("feature_importance.json")
+            
+            error_detail = (
+                f"Transparency artifacts not found. Missing files: {', '.join(missing_files)}. "
+                f"The validation may have failed to save artifacts. "
+                f"Searched in: {artifact_base}"
+            )
+            logger.error(error_detail)
+            raise HTTPException(status_code=404, detail=error_detail)
         
         # Sort feature importance by value (descending)
         if feature_importance:

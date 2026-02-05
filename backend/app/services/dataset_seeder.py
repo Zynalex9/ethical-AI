@@ -158,9 +158,10 @@ class BenchmarkDatasetSeeder:
         db.add(dataset)
         
         # Create audit log
+        # FIX: Changed AuditAction.CREATE to DATASET_UPLOAD (correct enum value)
         audit_log = AuditLog(
             user_id=user_id,
-            action=AuditAction.CREATE,
+            action=AuditAction.DATASET_UPLOAD,
             resource_type=ResourceType.DATASET,
             resource_id=dataset.id,
             details={

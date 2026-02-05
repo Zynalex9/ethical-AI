@@ -249,7 +249,8 @@ class AccountabilityTracker:
             metrics: Dictionary of metric name -> value
         """
         if not hasattr(self, '_current_run_context'):
-            raise RuntimeError("No active validation run. Call start_validation_run first.")
+            logger.warning("No active validation run context, creating empty one")
+            self._current_run_context = {"metrics": {}, "params": {}, "artifacts": []}
         
         # Store metrics
         self._current_run_context["metrics"].update(metrics)
@@ -258,7 +259,13 @@ class AccountabilityTracker:
         if self.use_mlflow and self._mlflow and self._current_run:
             for name, value in metrics.items():
                 if isinstance(value, (int, float)):
-                    self._mlflow.log_metric(name, value)
+                    try:
+                        # Sanitize metric name for MLflow (no spaces, special chars)
+                        safe_name = str(name).replace(" ", "_").replace("-", "_").replace(".", "_")
+                        safe_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in safe_name)
+                        self._mlflow.log_metric(safe_name, float(value))
+                    except Exception as e:
+                        logger.warning(f"Failed to log metric '{name}': {str(e)}")
         
         logger.debug(f"Logged {len(metrics)} metrics")
     
@@ -282,9 +289,63 @@ class AccountabilityTracker:
             data: Dictionary to log
             filename: Name for the JSON file
         """
-        if self.use_mlflow and self._mlflow and self._current_run:
+        # FIX: Complete rewrite with better error handling and debugging
+        if not self.use_mlflow:
+            logger.warning(f"❌ MLflow disabled, cannot save {filename}")
+            raise RuntimeError(f"MLflow disabled, cannot save {filename}")
+            
+        if not self._mlflow:
+            logger.error(f"❌ MLflow client not initialized, cannot save {filename}")
+            raise RuntimeError(f"MLflow client not initialized, cannot save {filename}")
+            
+        if not self._current_run:
+            logger.error(f"❌ No active MLflow run, cannot save {filename}")
+            raise RuntimeError(f"No active MLflow run, cannot save {filename}")
+        
+        try:
+            run_id = self._current_run.info.run_id
+            logger.info(f"🔄 Attempting to save {filename} to run {run_id}...")
+            
+            # Use mlflow.log_dict which saves as JSON artifact
             self._mlflow.log_dict(data, filename)
-            logger.debug(f"Logged dict artifact: {filename}")
+            
+            # Verify the file was actually saved
+            import os
+            artifact_uri = self._current_run.info.artifact_uri
+            
+            # FIX: Properly convert artifact URI to Windows path
+            if artifact_uri.startswith("file:///"):
+                # Remove file:/// prefix and convert forward slashes to backslashes
+                local_path = artifact_uri.replace("file:///", "").replace("/", "\\")
+            elif artifact_uri.startswith("file://"):
+                # Remove file:// prefix and convert
+                local_path = artifact_uri.replace("file://", "").replace("/", "\\")
+            elif artifact_uri.startswith("./"):
+                # Relative path - make absolute
+                local_path = os.path.abspath(artifact_uri)
+            else:
+                local_path = artifact_uri.replace("/", "\\")
+            
+            # Build full path to artifact file
+            expected_path = os.path.join(local_path, filename)
+            
+            if os.path.exists(expected_path):
+                file_size = os.path.getsize(expected_path)
+                logger.info(f"✅ SUCCESS: Saved {filename} ({file_size} bytes) to {expected_path}")
+            else:
+                logger.warning(f"⚠️ File saved but not found at expected path: {expected_path}")
+                # Try to find where it actually went
+                artifact_dir = os.path.dirname(expected_path)
+                if os.path.exists(artifact_dir):
+                    files = os.listdir(artifact_dir)
+                    logger.info(f"📁 Files in artifact dir: {files}")
+                else:
+                    logger.error(f"❌ Artifact directory doesn't exist: {artifact_dir}")
+                
+        except Exception as e:
+            logger.error(f"❌ FAILED to save {filename}: {str(e)}", exc_info=True)
+            # Re-raise so caller can handle it
+            raise
     
     def end_validation_run(
         self,

@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import logging
 from typing import List, Optional
 from uuid import UUID
 from pathlib import Path
@@ -19,6 +20,9 @@ from ..models.user import User
 from ..models.project import Project
 from ..models.dataset import Dataset
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
+
+# FIX: Added logger initialization to handle error logging in load_benchmark_dataset
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 

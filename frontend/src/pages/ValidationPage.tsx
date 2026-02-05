@@ -128,7 +128,7 @@ export default function ValidationPage() {
                 setIsRunning(false);
                 clearInterval(interval);
             }
-        }, 2000); // Poll every 2 seconds
+        }, 4000); // Poll every 4 seconds
 
         return () => clearInterval(interval);
     }, [taskId, isRunning, suiteId]);

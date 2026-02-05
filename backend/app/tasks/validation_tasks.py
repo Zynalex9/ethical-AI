@@ -485,6 +485,13 @@ async def _run_transparency_validation_async(
 ) -> Dict[str, Any]:
     """Core transparency validation logic (async)."""
     try:
+        # FIX: Validate that target_column is provided
+        if not target_column or target_column is None:
+            raise ValueError(
+                "Target column is required for transparency validation. "
+                "Please specify the target column in the validation form."
+            )
+        
         if progress_callback:
             progress_callback(10, "Loading model")
         
@@ -515,6 +522,9 @@ async def _run_transparency_validation_async(
             use_mlflow=True
         )
         
+        # FIX: Add debugging to verify tracker is working
+        logger.info(f"🔍 MLflow tracker initialized: use_mlflow={tracker.use_mlflow}, _mlflow={tracker._mlflow is not None}")
+        
         tracker.start_validation_run(
             model_name=model_record.name,
             model_id=model_id,
@@ -526,6 +536,12 @@ async def _run_transparency_validation_async(
             user_id=user_id
         )
         
+        # FIX: Verify run was started
+        if tracker._current_run:
+            logger.info(f"✅ MLflow run started: {tracker._current_run.info.run_id}")
+        else:
+            logger.error("❌ Failed to start MLflow run!")
+        
         if progress_callback:
             progress_callback(30, "Loading data")
         validation.progress = 30
@@ -534,6 +550,14 @@ async def _run_transparency_validation_async(
         # Load model and dataset
         model = UniversalModelLoader.load(model_record.file_path)
         df = pd.read_csv(dataset_record.file_path)
+        
+        # FIX: Validate that target column exists in dataset
+        if target_column not in df.columns:
+            available_columns = ", ".join(df.columns.tolist()[:10])
+            raise ValueError(
+                f"Target column '{target_column}' not found in dataset. "
+                f"Available columns: {available_columns}..."
+            )
         
         # Prepare data
         X = df.drop(columns=[target_column])
@@ -590,13 +614,43 @@ async def _run_transparency_validation_async(
             additional_info=additional_info
         )
         
-        # Log to MLflow
+        # Build importance dictionary from SHAP results
         importance_dict = {
             fi.feature_name: fi.importance
             for fi in global_exp.feature_importances
         }
-        tracker.log_metrics(importance_dict)
-        tracker.log_dict(model_card, "model_card.json")
+        logger.info(f"📊 Built feature importance dict with {len(importance_dict)} features")
+        
+        # Log metrics to MLflow (with sanitized names for MLflow compatibility)
+        try:
+            # MLflow metric names can't contain spaces or special chars, so sanitize them
+            sanitized_metrics = {
+                key.replace(" ", "_").replace("-", "_").replace(".", "_"): float(value)
+                for key, value in importance_dict.items()
+            }
+            tracker.log_metrics(sanitized_metrics)
+            logger.info(f"✅ Logged {len(sanitized_metrics)} metrics to MLflow")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to log metrics (non-fatal): {str(e)}")
+        
+        # Save transparency artifacts to MLflow
+        logger.info("💾 Saving transparency artifacts to MLflow...")
+        
+        try:
+            logger.info(f"  → Saving feature_importance.json ({len(importance_dict)} features)...")
+            tracker.log_dict(importance_dict, "feature_importance.json")
+            logger.info("  ✅ feature_importance.json saved")
+        except Exception as e:
+            logger.error(f"  ❌ Failed to save feature_importance.json: {str(e)}", exc_info=True)
+        
+        try:
+            logger.info(f"  → Saving model_card.json...")
+            tracker.log_dict(model_card, "model_card.json")
+            logger.info("  ✅ model_card.json saved")
+        except Exception as e:
+            logger.error(f"  ❌ Failed to save model_card.json: {str(e)}", exc_info=True)
+        
+        logger.info("✅ Transparency artifact saving complete")
         
         # Generate sample local explanations (Phase 2)
         sample_predictions = []
@@ -643,10 +697,10 @@ async def _run_transparency_validation_async(
         
         # Save sample predictions
         if sample_predictions:
+            logger.info(f"💾 Saving {len(sample_predictions)} sample predictions...")
             tracker.log_dict({"samples": sample_predictions}, "sample_predictions.json")
-            logger.info(f"Saved {len(sample_predictions)} sample predictions to MLflow")
         else:
-            logger.warning("No sample predictions were generated")
+            logger.warning("⚠️ No sample predictions were generated")
         
         if progress_callback:
             progress_callback(90, "Saving results")
@@ -1006,6 +1060,13 @@ def run_all_validations_task(
                     ),
                     **fairness_config
                 )
+                
+                # Update validation record with MLflow run ID
+                if fairness_result.get("mlflow_run_id"):
+                    fairness_validation.mlflow_run_id = fairness_result["mlflow_run_id"]
+                    await db.commit()
+                    logger.info(f"✅ Saved MLflow run ID {fairness_result['mlflow_run_id']} to validation {fairness_validation.id}")
+                
                 results["validations"]["fairness"] = fairness_result
                 
                 # 2. Transparency Validation (33-66%)
@@ -1034,6 +1095,13 @@ def run_all_validations_task(
                     ),
                     **transparency_config
                 )
+                
+                # Update validation record with MLflow run ID
+                if transparency_result.get("mlflow_run_id"):
+                    transparency_validation.mlflow_run_id = transparency_result["mlflow_run_id"]
+                    await db.commit()
+                    logger.info(f"✅ Saved MLflow run ID {transparency_result['mlflow_run_id']} to validation {transparency_validation.id}")
+                
                 results["validations"]["transparency"] = transparency_result
                 
                 # 3. Privacy Validation (66-100%)
@@ -1061,6 +1129,13 @@ def run_all_validations_task(
                     ),
                     **privacy_config
                 )
+                
+                # Update validation record with MLflow run ID
+                if privacy_result.get("mlflow_run_id"):
+                    privacy_validation.mlflow_run_id = privacy_result["mlflow_run_id"]
+                    await db.commit()
+                    logger.info(f"✅ Saved MLflow run ID {privacy_result['mlflow_run_id']} to validation {privacy_validation.id}")
+                
                 results["validations"]["privacy"] = privacy_result
                 
                 # 4. Calculate overall results

@@ -54,14 +54,48 @@ class Settings(BaseSettings):
     allowed_model_extensions: List[str] = [".pkl", ".joblib", ".h5", ".pt", ".pth", ".onnx"]
     allowed_dataset_extensions: List[str] = [".csv", ".parquet", ".json"]
     
-    # MLflow
+    # MLflow - Use absolute path to avoid working directory issues between Celery and FastAPI
     mlflow_tracking_uri: str = "sqlite:///./mlflow.db"
     mlflow_experiment_name: str = "ethical-ai-validations"
-    mlflow_artifact_location: str = "./mlruns"  # Artifacts stored in filesystem
+    mlflow_artifact_location: str = "./mlruns"  # Will be converted to absolute path in __init__
     
     # Celery
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
+    
+    def __init__(self, **data):
+        """Initialize settings and convert relative paths to absolute."""
+        super().__init__(**data)
+        
+        # Convert relative paths to absolute based on the backend directory
+        # Get the directory where this config.py file is located (backend/app/)
+        config_dir = os.path.dirname(os.path.abspath(__file__))
+        backend_dir = os.path.dirname(config_dir)  # Go up to backend/
+        
+        # Convert mlflow_artifact_location to absolute path
+        if not os.path.isabs(self.mlflow_artifact_location):
+            self.mlflow_artifact_location = os.path.abspath(
+                os.path.join(backend_dir, self.mlflow_artifact_location)
+            )
+        
+        # Convert mlflow_tracking_uri if it's a SQLite file URI
+        if self.mlflow_tracking_uri.startswith("sqlite:///./"):
+            db_path = self.mlflow_tracking_uri.replace("sqlite:///./", "")
+            abs_db_path = os.path.abspath(os.path.join(backend_dir, db_path))
+            self.mlflow_tracking_uri = f"sqlite:///{abs_db_path}"
+        
+        # Convert upload_dir to absolute path
+        if not os.path.isabs(self.upload_dir):
+            self.upload_dir = os.path.abspath(
+                os.path.join(backend_dir, self.upload_dir)
+            )
+        
+        # Log paths for debugging
+        print(f"🔧 Configuration loaded:")
+        print(f"   Backend directory: {backend_dir}")
+        print(f"   MLflow tracking URI: {self.mlflow_tracking_uri}")
+        print(f"   MLflow artifacts: {self.mlflow_artifact_location}")
+        print(f"   Upload directory: {self.upload_dir}")
 
 
 @lru_cache()
