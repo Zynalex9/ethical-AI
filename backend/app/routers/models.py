@@ -22,6 +22,8 @@ from ..services.model_loader import UniversalModelLoader
 
 router = APIRouter(prefix="/models", tags=["models"])
 
+ALLOWED_MODEL_EXTENSIONS = {".pkl", ".joblib", ".pickle", ".h5", ".keras", ".pt", ".pth", ".onnx"}
+
 
 # Pydantic models for responses
 from pydantic import BaseModel
@@ -92,15 +94,19 @@ async def upload_model(
     if current_user.role.value != "admin" and project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing file name")
+
     # Validate file extension
     ext = Path(file.filename).suffix.lower()
-    allowed_extensions = {'.pkl', '.joblib', '.pickle', '.h5', '.keras', '.pt', '.pth', '.onnx'}
-    
-    if ext not in allowed_extensions:
+    if ext not in ALLOWED_MODEL_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+            detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_MODEL_EXTENSIONS))}"
         )
+
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Model name cannot be empty")
     
     # Create upload directory
     upload_dir = Path(settings.upload_dir) / "models" / str(project_id)
@@ -108,7 +114,9 @@ async def upload_model(
     
     # Generate unique filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = "".join(c for c in name if c.isalnum() or c in "._-")
+    safe_name = "".join(c for c in name if c.isalnum() or c in "._-").strip("._-")
+    if not safe_name:
+        safe_name = "model"
     filename = f"{safe_name}_{timestamp}{ext}"
     file_path = upload_dir / filename
     
@@ -118,17 +126,38 @@ async def upload_model(
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
-    
-    # Get file size
-    file_size = os.path.getsize(file_path)
-    
-    # Try to load and extract metadata
-    model_metadata = {}
+
     try:
-        loaded_model = UniversalModelLoader.load(str(file_path))
-        model_metadata = UniversalModelLoader.get_model_metadata(loaded_model)
+        # Get file size and validate limits
+        file_size = os.path.getsize(file_path)
+        if file_size <= 0:
+            raise HTTPException(status_code=400, detail="Uploaded model file is empty")
+
+        max_size_bytes = settings.max_upload_size_mb * 1024 * 1024
+        if file_size > max_size_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Model file exceeds maximum size of {settings.max_upload_size_mb} MB"
+            )
+
+        # Strict validation: model must be loadable at upload time
+        try:
+            loaded_model = UniversalModelLoader.load(str(file_path))
+            model_metadata = UniversalModelLoader.get_model_metadata(loaded_model)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model file is invalid or not loadable for the declared format: {str(e)}"
+            )
+
+    except HTTPException:
+        if file_path.exists():
+            file_path.unlink(missing_ok=True)
+        raise
     except Exception as e:
-        model_metadata = {"load_warning": str(e)}
+        if file_path.exists():
+            file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Failed to validate uploaded model: {str(e)}")
     
     # Create database record
     ml_model = MLModel(

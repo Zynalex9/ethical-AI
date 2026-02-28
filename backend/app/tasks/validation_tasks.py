@@ -55,6 +55,70 @@ async def get_db_session():
         return session
 
 
+def _align_features_to_model(
+    X: pd.DataFrame,
+    model: Any,
+    context: str = "validation",
+    allow_missing_fill: bool = True,
+) -> pd.DataFrame:
+    """Align dataset features with model schema.
+
+    - If model exposes feature_names_in_, reorder and drop extras by name.
+    - Missing named features are filled with 0 when allow_missing_fill=True.
+    - Else if model exposes n_features_in_, trim extras by position.
+    - Missing positional features are padded with 0 when allow_missing_fill=True.
+    """
+    model_obj = model._model if hasattr(model, '_model') else model
+
+    if hasattr(model_obj, 'feature_names_in_'):
+        model_features = [str(f) for f in list(model_obj.feature_names_in_)]
+        missing = [f for f in model_features if f not in X.columns]
+        if missing:
+            if allow_missing_fill:
+                logger.warning(
+                    f"{context}: filling missing model features with 0: {missing[:15]}"
+                )
+                for feature in missing:
+                    X[feature] = 0.0
+            else:
+                available_preview = ", ".join(list(X.columns)[:15])
+                raise ValueError(
+                    f"{context}: dataset is missing required model features: {missing}. "
+                    f"Available columns (first 15): {available_preview}"
+                )
+
+        extra = [c for c in X.columns if c not in model_features]
+        if extra:
+            logger.info(f"{context}: dropping extra columns not used by model: {extra[:15]}")
+
+        return X[model_features]
+
+    if hasattr(model_obj, 'n_features_in_'):
+        expected_features = int(model_obj.n_features_in_)
+        if X.shape[1] < expected_features:
+            if allow_missing_fill:
+                missing_count = expected_features - X.shape[1]
+                logger.warning(
+                    f"{context}: model expects {expected_features} features, got {X.shape[1]}; "
+                    f"padding {missing_count} synthetic feature(s) with 0"
+                )
+                for i in range(missing_count):
+                    X[f"__pad_feature_{i}"] = 0.0
+            else:
+                raise ValueError(
+                    f"{context}: model expects {expected_features} features, "
+                    f"but dataset has only {X.shape[1]} after preprocessing"
+                )
+        if X.shape[1] > expected_features:
+            logger.warning(
+                f"{context}: model expects {expected_features} features, got {X.shape[1]}; "
+                f"dropping {X.shape[1] - expected_features} extra columns by position"
+            )
+            return X.iloc[:, :expected_features]
+
+    return X
+
+
 # Core async validation functions (can be called directly or from Celery tasks)
 async def _run_fairness_validation_async(
     db: AsyncSession,
@@ -166,23 +230,8 @@ async def _run_fairness_validation_async(
             model = UniversalModelLoader.load(model_record.file_path)
             logger.info(f"Model loaded: {type(model).__name__}, wrapper type: {model.model_type}")
             
-            # Feature matching
-            model_obj = model._model if hasattr(model, '_model') else model
-            if hasattr(model_obj, 'n_features_in_'):
-                expected_features = model_obj.n_features_in_
-                logger.info(f"Model expects {expected_features} features")
-                
-                if X.shape[1] != expected_features:
-                    if hasattr(model_obj, 'feature_names_in_'):
-                        model_features = list(model_obj.feature_names_in_)
-                        logger.info(f"Model expects features: {model_features}")
-                        missing_features = set(model_features) - set(X.columns)
-                        if missing_features:
-                            raise ValueError(f"Dataset is missing features: {missing_features}")
-                        X = X[model_features]
-                    else:
-                        logger.warning(f"Using first {expected_features} features")
-                        X = X.iloc[:, :expected_features]
+            # Feature matching (resilient mode: fill missing with zeros, drop extras)
+            X = _align_features_to_model(X, model, context="fairness(prediction-only)", allow_missing_fill=True)
             
             logger.info(f"Final X shape before prediction: {X.shape}")
             
@@ -225,43 +274,8 @@ async def _run_fairness_validation_async(
             model = UniversalModelLoader.load(model_record.file_path)
             logger.info(f"Model loaded: {type(model).__name__}, wrapper type: {model.model_type}")
             
-            # Check if model has specific feature requirements
-            model_obj = model._model if hasattr(model, '_model') else model
-            if hasattr(model_obj, 'n_features_in_'):
-                expected_features = model_obj.n_features_in_
-                logger.info(f"Model expects {expected_features} features")
-                
-                if X.shape[1] != expected_features:
-                    logger.warning(
-                        f"Feature mismatch: model expects {expected_features} features, "
-                        f"but dataset has {X.shape[1]} features after dropping target."
-                    )
-                    
-                    # Try to match features if model has feature names
-                    if hasattr(model_obj, 'feature_names_in_'):
-                        model_features = list(model_obj.feature_names_in_)
-                        logger.info(f"Model expects features: {model_features}")
-                        
-                        # Ensure we have all required features
-                        missing_features = set(model_features) - set(X.columns)
-                        if missing_features:
-                            raise ValueError(
-                                f"Dataset is missing features required by model: {missing_features}"
-                            )
-                        
-                        # Select and order features to match model
-                        X = X[model_features]
-                        logger.info(f"Selected {len(model_features)} features matching model: {list(X.columns)}")
-                    else:
-                        # No feature names available, use first N features
-                        logger.warning(
-                            f"Model has no feature_names_in_, using first {expected_features} features"
-                    )
-                    original_cols = list(X.columns)
-                    X = X.iloc[:, :expected_features]
-                    logger.info(f"Selected first {expected_features} features: {list(X.columns)} (from {original_cols})")
-            else:
-                logger.info("Model has no n_features_in_ attribute, using all features")
+            # Feature matching (resilient mode: fill missing with zeros, drop extras)
+            X = _align_features_to_model(X, model, context="fairness", allow_missing_fill=True)
             
             logger.info(f"Final X shape before prediction: {X.shape}")
             
@@ -568,10 +582,13 @@ async def _run_transparency_validation_async(
         # Prepare data
         X = df.drop(columns=[target_column])
         y = df[target_column]
-        feature_names = X.columns.tolist()
         
         for col in X.select_dtypes(include=['object']).columns:
             X[col] = pd.factorize(X[col])[0]
+
+        # Align to model feature schema (drop extras / reorder / validate missing)
+        X = _align_features_to_model(X, model, context="transparency", allow_missing_fill=True)
+        feature_names = X.columns.tolist()
         
         # Encode target if it's categorical
         if y.dtype == 'object':

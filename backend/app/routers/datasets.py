@@ -25,6 +25,7 @@ from ..models.audit_log import AuditLog, AuditAction, ResourceType
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
+ALLOWED_DATASET_EXTENSIONS = {".csv"}
 
 
 # Pydantic models for responses
@@ -95,15 +96,19 @@ async def upload_dataset(
     if current_user.role.value != "admin" and project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing file name")
+
     # Validate file extension
     ext = Path(file.filename).suffix.lower()
-    allowed_extensions = {'.csv'}
-    
-    if ext not in allowed_extensions:
+    if ext not in ALLOWED_DATASET_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+            detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_DATASET_EXTENSIONS))}"
         )
+
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Dataset name cannot be empty")
     
     # Create upload directory
     upload_dir = Path(settings.upload_dir) / "datasets" / str(project_id)
@@ -111,7 +116,9 @@ async def upload_dataset(
     
     # Generate unique filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = "".join(c for c in name if c.isalnum() or c in "._-")
+    safe_name = "".join(c for c in name if c.isalnum() or c in "._-").strip("._-")
+    if not safe_name:
+        safe_name = "dataset"
     filename = f"{safe_name}_{timestamp}{ext}"
     file_path = upload_dir / filename
     
@@ -121,13 +128,29 @@ async def upload_dataset(
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
-    
+
     # Parse CSV and extract metadata
     try:
+        file_size = os.path.getsize(file_path)
+        if file_size <= 0:
+            raise HTTPException(status_code=400, detail="Uploaded dataset file is empty")
+
+        max_size_bytes = settings.max_upload_size_mb * 1024 * 1024
+        if file_size > max_size_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Dataset file exceeds maximum size of {settings.max_upload_size_mb} MB"
+            )
+
         df = pd.read_csv(file_path)
         row_count = len(df)
         column_count = len(df.columns)
         columns = df.columns.tolist()
+
+        if row_count == 0:
+            raise HTTPException(status_code=400, detail="Dataset has no rows")
+        if column_count == 0:
+            raise HTTPException(status_code=400, detail="Dataset has no columns")
         
         # Generate profile data
         profile_data = {
@@ -136,7 +159,13 @@ async def upload_dataset(
             "unique_counts": {col: int(df[col].nunique()) for col in columns},
             "memory_usage": int(df.memory_usage(deep=True).sum())
         }
+    except HTTPException:
+        if file_path.exists():
+            file_path.unlink(missing_ok=True)
+        raise
     except Exception as e:
+        if file_path.exists():
+            file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
     
     # Parse sensitive attributes
@@ -146,6 +175,8 @@ async def upload_dataset(
         # Validate columns exist
         invalid = set(sensitive_list) - set(columns)
         if invalid:
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
             raise HTTPException(
                 status_code=400,
                 detail=f"Sensitive columns not found in dataset: {invalid}"
@@ -153,6 +184,8 @@ async def upload_dataset(
     
     # Validate target column
     if target_column and target_column not in columns:
+        if file_path.exists():
+            file_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=400,
             detail=f"Target column '{target_column}' not found in dataset"

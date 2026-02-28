@@ -154,6 +154,18 @@ async def run_fairness_validation(
     
     if not dataset_record:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    if not model_record.file_path or not os.path.exists(model_record.file_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Model file is missing on disk. Please re-upload the model before running validation."
+        )
+
+    if not dataset_record.file_path or not os.path.exists(dataset_record.file_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Dataset file is missing on disk. Please re-upload the dataset before running validation."
+        )
     
     # Validate columns exist
     if request.sensitive_feature not in dataset_record.columns:

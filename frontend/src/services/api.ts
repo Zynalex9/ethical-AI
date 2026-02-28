@@ -9,6 +9,18 @@ const api: AxiosInstance = axios.create({
     },
 });
 
+export const getApiErrorMessage = (error: unknown, fallback = 'Request failed'): string => {
+    if (axios.isAxiosError(error)) {
+        const detail = (error.response?.data as any)?.detail;
+        if (typeof detail === 'string' && detail.trim()) return detail;
+        if (Array.isArray(detail)) return detail.map((d) => d?.msg || d).join('; ');
+        if (error.message) return error.message;
+    }
+
+    if (error instanceof Error && error.message) return error.message;
+    return fallback;
+};
+
 // Request interceptor to add auth token
 api.interceptors.request.use(
     (config) => {
@@ -138,11 +150,19 @@ export const modelsApi = {
 
 // Datasets API
 export const datasetsApi = {
-    upload: async (projectId: string, file: File, name: string) => {
+    upload: async (
+        projectId: string,
+        file: File,
+        name: string,
+        sensitiveAttributes?: string,
+        targetColumn?: string
+    ) => {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('name', name);
         formData.append('project_id', projectId);
+        if (sensitiveAttributes?.trim()) formData.append('sensitive_attributes', sensitiveAttributes.trim());
+        if (targetColumn?.trim()) formData.append('target_column', targetColumn.trim());
 
         const response = await api.post('/datasets/upload', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },

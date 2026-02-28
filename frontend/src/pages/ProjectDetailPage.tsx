@@ -41,7 +41,7 @@ import {
     AccountTree as TraceIcon,
 } from '@mui/icons-material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi } from '../services/api';
+import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi, getApiErrorMessage } from '../services/api';
 import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
 import TraceabilityMatrix from '../components/TraceabilityMatrix';
 
@@ -159,6 +159,15 @@ export default function ProjectDetailPage() {
     const [uploadProgress, setUploadProgress] = useState(0);
     const [error, setError] = useState('');
 
+    const MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024;
+    const MODEL_EXTENSIONS = new Set(['.pkl', '.joblib', '.pickle', '.h5', '.keras', '.pt', '.pth', '.onnx']);
+    const DATASET_EXTENSIONS = new Set(['.csv']);
+
+    const getFileExtension = (filename: string): string => {
+        const dot = filename.lastIndexOf('.');
+        return dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+    };
+
     // Fetch project
     const { data: project, isLoading: projectLoading } = useQuery({
         queryKey: ['project', id],
@@ -206,6 +215,22 @@ export default function ProjectDetailPage() {
             return;
         }
 
+        const ext = getFileExtension(file.name);
+        if (!MODEL_EXTENSIONS.has(ext)) {
+            setError('Unsupported model format. Allowed: .pkl, .joblib, .pickle, .h5, .keras, .pt, .pth, .onnx');
+            return;
+        }
+
+        if (file.size <= 0) {
+            setError('Selected model file is empty');
+            return;
+        }
+
+        if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+            setError('Model file exceeds 100 MB upload limit');
+            return;
+        }
+
         setUploading(true);
         setError('');
 
@@ -216,7 +241,7 @@ export default function ProjectDetailPage() {
             setUploadModelOpen(false);
             setModelName('');
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Upload failed');
+            setError(getApiErrorMessage(err, 'Model upload failed'));
         } finally {
             setUploading(false);
             setUploadProgress(0);
@@ -230,19 +255,27 @@ export default function ProjectDetailPage() {
             return;
         }
 
+        const ext = getFileExtension(file.name);
+        if (!DATASET_EXTENSIONS.has(ext)) {
+            setError('Unsupported dataset format. Allowed: .csv');
+            return;
+        }
+
+        if (file.size <= 0) {
+            setError('Selected dataset file is empty');
+            return;
+        }
+
+        if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+            setError('Dataset file exceeds 100 MB upload limit');
+            return;
+        }
+
         setUploading(true);
         setError('');
 
         try {
-            // Create FormData
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('name', datasetName);
-            formData.append('project_id', id!);
-            if (sensitiveAttrs) formData.append('sensitive_attributes', sensitiveAttrs);
-            if (targetColumn) formData.append('target_column', targetColumn);
-
-            await datasetsApi.upload(id!, file, datasetName);
+            await datasetsApi.upload(id!, file, datasetName, sensitiveAttrs, targetColumn);
             queryClient.invalidateQueries({ queryKey: ['datasets', id] });
             queryClient.invalidateQueries({ queryKey: ['project', id] });
             setUploadDatasetOpen(false);
@@ -250,7 +283,7 @@ export default function ProjectDetailPage() {
             setSensitiveAttrs('');
             setTargetColumn('');
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Upload failed');
+            setError(getApiErrorMessage(err, 'Dataset upload failed'));
         } finally {
             setUploading(false);
             setUploadProgress(0);
