@@ -163,10 +163,11 @@ export const datasetsApi = {
 
 // Validation API
 export const validationApi = {
-    // Run all 4 validations in background
+    // Run selected validations in background
     runAll: async (data: {
         model_id: string;
         dataset_id: string;
+        selected_validations?: string[];
         fairness_config: {
             sensitive_feature: string;
             target_column: string | null;

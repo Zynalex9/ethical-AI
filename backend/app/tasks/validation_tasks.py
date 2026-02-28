@@ -1003,178 +1003,228 @@ def run_all_validations_task(
     fairness_config: Dict[str, Any],
     transparency_config: Dict[str, Any],
     privacy_config: Dict[str, Any],
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    selected_validations: Optional[list] = None
 ) -> Dict[str, Any]:
     """
-    Run all validations in sequence.
-    
-    This is the main orchestrator task that runs:
-    1. Fairness validation
-    2. Transparency validation
-    3. Privacy validation
-    4. Accountability (tracked via MLflow in each validation)
-    
-    Returns aggregate results.
+    Run selected validations in sequence.
+
+    selected_validations is a list of zero or more of:
+        "fairness", "transparency", "privacy", "accountability"
+    If empty / None every validator runs (backward-compatible default).
     """
     import asyncio
     from app.models.validation_suite import ValidationSuite
-    
+
+    # ── normalise selection ────────────────────────────────────────────
+    ALL = ["fairness", "transparency", "privacy", "accountability"]
+    if not selected_validations:
+        run_set = set(ALL)
+    else:
+        run_set = set(v.lower() for v in selected_validations)
+
+    # validators that produce DB records (accountability is handled separately)
+    db_validators = [v for v in ["fairness", "transparency", "privacy"] if v in run_set]
+    run_accountability = "accountability" in run_set
+
+    # ── progress slices ───────────────────────────────────────────────
+    # Split 0-95% equally among the DB validators (+ 1 slice if accountability only)
+    slice_count = len(db_validators) + (1 if run_accountability and not db_validators else 0)
+    slice_size = int(95 / slice_count) if slice_count else 95
+
+    def start_pct(validator_index):
+        return validator_index * slice_size
+
     async def _run():
         suite = None
         async with async_session_maker() as db:
             try:
-                # Get validation suite
                 result = await db.execute(
                     select(ValidationSuite).where(ValidationSuite.id == UUID(suite_id))
                 )
                 suite = result.scalar_one()
-                
+
                 results = {
                     "suite_id": suite_id,
                     "validations": {}
                 }
-                
-                # 1. Fairness Validation (0-33%)
-                self.update_state(state="PROGRESS", meta={"progress": 0, "step": "Starting fairness validation"})
-                
-                fairness_validation = Validation(
-                    model_id=UUID(model_id),
-                    dataset_id=UUID(dataset_id),
-                    status=ValidationStatus.PENDING,
-                    progress=0
-                )
-                db.add(fairness_validation)
-                await db.commit()
-                await db.refresh(fairness_validation)
-                
-                # Run fairness validation directly
-                fairness_result = await _run_fairness_validation_async(
-                    db=db,
-                    validation_id=str(fairness_validation.id),
-                    model_id=model_id,
-                    dataset_id=dataset_id,
-                    user_id=user_id,
-                    progress_callback=lambda p, s: self.update_state(
-                        state="PROGRESS", 
-                        meta={"progress": int(p * 0.33), "step": f"Fairness: {s}"}
-                    ),
-                    **fairness_config
-                )
-                
-                # Update validation record with MLflow run ID
-                if fairness_result.get("mlflow_run_id"):
-                    fairness_validation.mlflow_run_id = fairness_result["mlflow_run_id"]
+
+                idx = 0  # tracks which slice we're in
+
+                # ── 1. Fairness ───────────────────────────────────────
+                if "fairness" in run_set:
+                    base = start_pct(idx)
+                    self.update_state(state="PROGRESS", meta={"progress": base, "step": "Starting fairness validation"})
+
+                    fairness_validation = Validation(
+                        model_id=UUID(model_id),
+                        dataset_id=UUID(dataset_id),
+                        status=ValidationStatus.PENDING,
+                        progress=0
+                    )
+                    db.add(fairness_validation)
                     await db.commit()
-                    logger.info(f"✅ Saved MLflow run ID {fairness_result['mlflow_run_id']} to validation {fairness_validation.id}")
-                
-                results["validations"]["fairness"] = fairness_result
-                
-                # 2. Transparency Validation (33-66%)
-                self.update_state(state="PROGRESS", meta={"progress": 33, "step": "Starting transparency validation"})
-                
-                transparency_validation = Validation(
-                    model_id=UUID(model_id),
-                    dataset_id=UUID(dataset_id),
-                    status=ValidationStatus.PENDING,
-                    progress=0
-                )
-                db.add(transparency_validation)
-                await db.commit()
-                await db.refresh(transparency_validation)
-                
-                # Run transparency validation
-                transparency_result = await _run_transparency_validation_async(
-                    db=db,
-                    validation_id=str(transparency_validation.id),
-                    model_id=model_id,
-                    dataset_id=dataset_id,
-                    user_id=user_id,
-                    progress_callback=lambda p, s: self.update_state(
-                        state="PROGRESS",
-                        meta={"progress": 33 + int(p * 0.33), "step": f"Transparency: {s}"}
-                    ),
-                    **transparency_config
-                )
-                
-                # Update validation record with MLflow run ID
-                if transparency_result.get("mlflow_run_id"):
-                    transparency_validation.mlflow_run_id = transparency_result["mlflow_run_id"]
+                    await db.refresh(fairness_validation)
+
+                    fairness_result = await _run_fairness_validation_async(
+                        db=db,
+                        validation_id=str(fairness_validation.id),
+                        model_id=model_id,
+                        dataset_id=dataset_id,
+                        user_id=user_id,
+                        progress_callback=lambda p, s: self.update_state(
+                            state="PROGRESS",
+                            meta={"progress": base + int(p * slice_size / 100), "step": f"Fairness: {s}"}
+                        ),
+                        **fairness_config
+                    )
+
+                    if fairness_result.get("mlflow_run_id"):
+                        fairness_validation.mlflow_run_id = fairness_result["mlflow_run_id"]
+                        await db.commit()
+
+                    results["validations"]["fairness"] = fairness_result
+                    suite.fairness_validation_id = fairness_validation.id
                     await db.commit()
-                    logger.info(f"✅ Saved MLflow run ID {transparency_result['mlflow_run_id']} to validation {transparency_validation.id}")
-                
-                results["validations"]["transparency"] = transparency_result
-                
-                # 3. Privacy Validation (66-100%)
-                self.update_state(state="PROGRESS", meta={"progress": 66, "step": "Starting privacy validation"})
-                
-                privacy_validation = Validation(
-                    model_id=UUID(model_id) if model_id else None,
-                    dataset_id=UUID(dataset_id),
-                    status=ValidationStatus.PENDING,
-                    progress=0
-                )
-                db.add(privacy_validation)
-                await db.commit()
-                await db.refresh(privacy_validation)
-                
-                # Run privacy validation
-                privacy_result = await _run_privacy_validation_async(
-                    db=db,
-                    validation_id=str(privacy_validation.id),
-                    dataset_id=dataset_id,
-                    user_id=user_id,
-                    progress_callback=lambda p, s: self.update_state(
-                        state="PROGRESS",
-                        meta={"progress": 66 + int(p * 0.33), "step": f"Privacy: {s}"}
-                    ),
-                    **privacy_config
-                )
-                
-                # Update validation record with MLflow run ID
-                if privacy_result.get("mlflow_run_id"):
-                    privacy_validation.mlflow_run_id = privacy_result["mlflow_run_id"]
+                    idx += 1
+
+                # ── 2. Transparency ───────────────────────────────────
+                if "transparency" in run_set:
+                    base = start_pct(idx)
+                    self.update_state(state="PROGRESS", meta={"progress": base, "step": "Starting transparency validation"})
+
+                    transparency_validation = Validation(
+                        model_id=UUID(model_id),
+                        dataset_id=UUID(dataset_id),
+                        status=ValidationStatus.PENDING,
+                        progress=0
+                    )
+                    db.add(transparency_validation)
                     await db.commit()
-                    logger.info(f"✅ Saved MLflow run ID {privacy_result['mlflow_run_id']} to validation {privacy_validation.id}")
-                
-                results["validations"]["privacy"] = privacy_result
-                
-                # 4. Calculate overall results
+                    await db.refresh(transparency_validation)
+
+                    transparency_result = await _run_transparency_validation_async(
+                        db=db,
+                        validation_id=str(transparency_validation.id),
+                        model_id=model_id,
+                        dataset_id=dataset_id,
+                        user_id=user_id,
+                        progress_callback=lambda p, s: self.update_state(
+                            state="PROGRESS",
+                            meta={"progress": base + int(p * slice_size / 100), "step": f"Transparency: {s}"}
+                        ),
+                        **transparency_config
+                    )
+
+                    if transparency_result.get("mlflow_run_id"):
+                        transparency_validation.mlflow_run_id = transparency_result["mlflow_run_id"]
+                        await db.commit()
+
+                    results["validations"]["transparency"] = transparency_result
+                    suite.transparency_validation_id = transparency_validation.id
+                    await db.commit()
+                    idx += 1
+
+                # ── 3. Privacy ────────────────────────────────────────
+                if "privacy" in run_set:
+                    base = start_pct(idx)
+                    self.update_state(state="PROGRESS", meta={"progress": base, "step": "Starting privacy validation"})
+
+                    privacy_validation = Validation(
+                        model_id=UUID(model_id) if model_id else None,
+                        dataset_id=UUID(dataset_id),
+                        status=ValidationStatus.PENDING,
+                        progress=0
+                    )
+                    db.add(privacy_validation)
+                    await db.commit()
+                    await db.refresh(privacy_validation)
+
+                    privacy_result = await _run_privacy_validation_async(
+                        db=db,
+                        validation_id=str(privacy_validation.id),
+                        dataset_id=dataset_id,
+                        user_id=user_id,
+                        progress_callback=lambda p, s: self.update_state(
+                            state="PROGRESS",
+                            meta={"progress": base + int(p * slice_size / 100), "step": f"Privacy: {s}"}
+                        ),
+                        **privacy_config
+                    )
+
+                    if privacy_result.get("mlflow_run_id"):
+                        privacy_validation.mlflow_run_id = privacy_result["mlflow_run_id"]
+                        await db.commit()
+
+                    results["validations"]["privacy"] = privacy_result
+                    suite.privacy_validation_id = privacy_validation.id
+                    await db.commit()
+                    idx += 1
+
+                # ── 4. Accountability (standalone audit summary) ──────
+                if run_accountability and not db_validators:
+                    # Accountability-only run: emit a simple audit record
+                    base = start_pct(0)
+                    self.update_state(state="PROGRESS", meta={"progress": base, "step": "Recording accountability audit"})
+                    tracker = AccountabilityTracker(
+                        tracking_uri=settings.mlflow_tracking_uri,
+                        experiment_name=settings.mlflow_experiment_name,
+                        use_mlflow=True
+                    )
+                    run_id = tracker.start_validation_run(
+                        model_name=model_id,
+                        model_id=model_id,
+                        dataset_name=dataset_id,
+                        dataset_id=dataset_id,
+                        requirement_name="Accountability Audit",
+                        requirement_id=suite_id,
+                        principle="accountability",
+                        user_id=user_id
+                    )
+                    tracker.log_metrics({"audit_generated": 1})
+                    tracker.end_validation_run(status="completed")
+                    results["validations"]["accountability"] = {
+                        "status": "completed",
+                        "progress": 100,
+                        "mlflow_run_id": run_id,
+                        "message": "Audit trail recorded via MLflow"
+                    }
+                elif run_accountability:
+                    # Accountability is implicitly tracked inside each validator run
+                    results["validations"]["accountability"] = {
+                        "status": "completed",
+                        "progress": 100,
+                        "message": "Audit trail recorded alongside selected validations"
+                    }
+
+                # ── Finalise ──────────────────────────────────────────
                 self.update_state(state="PROGRESS", meta={"progress": 95, "step": "Finalizing results"})
-                
-                # Calculate overall pass/fail
-                overall_passed = (
-                    fairness_result.get("overall_passed", False) and
-                    transparency_result.get("status") == "completed" and
-                    privacy_result.get("overall_passed", False)
-                )
-                
-                # Update suite
+
+                fairness_passed  = results["validations"].get("fairness", {}).get("overall_passed", True)
+                transp_passed    = results["validations"].get("transparency", {}).get("status") in (None, "completed")
+                privacy_passed   = results["validations"].get("privacy", {}).get("overall_passed", True)
+                overall_passed   = fairness_passed and transp_passed and privacy_passed
+
                 suite.status = "completed"
                 suite.overall_passed = overall_passed
-                suite.fairness_validation_id = fairness_validation.id
-                suite.transparency_validation_id = transparency_validation.id
-                suite.privacy_validation_id = privacy_validation.id
                 suite.completed_at = datetime.now(timezone.utc)
                 await db.commit()
-                
+
                 results["overall_passed"] = overall_passed
                 results["status"] = "completed"
-                
+
                 self.update_state(state="PROGRESS", meta={"progress": 100, "step": "Complete"})
-                
                 return results
-                
+
             except Exception as e:
                 logger.error(f"Validation suite failed: {str(e)}")
-                # Update suite on error
                 if suite is not None:
                     suite.status = "failed"
                     suite.error_message = str(e)
                     suite.completed_at = datetime.now(timezone.utc)
                     await db.commit()
                 raise
-    
-    # Run async function using asyncio event loop
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:

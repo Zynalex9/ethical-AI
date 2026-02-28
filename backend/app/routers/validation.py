@@ -634,6 +634,8 @@ class AllValidationsRequest(BaseModel):
     fairness_config: Dict[str, Any]
     transparency_config: Dict[str, Any]
     privacy_config: Dict[str, Any]
+    # Optional subset – if None/empty, every validator runs (backward-compatible)
+    selected_validations: Optional[List[str]] = None
 
 
 class ValidationSuiteResponse(BaseModel):
@@ -718,7 +720,8 @@ async def run_all_validations(
         fairness_config=request.fairness_config,
         transparency_config=request.transparency_config,
         privacy_config=request.privacy_config,
-        user_id=str(current_user.id)
+        user_id=str(current_user.id),
+        selected_validations=request.selected_validations or []
     )
     
     # Update suite with task ID
