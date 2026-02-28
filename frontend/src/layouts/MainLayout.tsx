@@ -32,6 +32,7 @@ import {
     Security as SecurityIcon,
     Logout as LogoutIcon,
     Person as PersonIcon,
+    AccountTree as TraceIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 

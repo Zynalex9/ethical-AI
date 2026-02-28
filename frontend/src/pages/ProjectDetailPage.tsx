@@ -38,10 +38,12 @@ import {
     Assessment as ValidationIcon,
     Assignment as RequirementIcon,
     AutoFixHigh as ElicitIcon,
+    AccountTree as TraceIcon,
 } from '@mui/icons-material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi } from '../services/api';
+import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi } from '../services/api';
 import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
+import TraceabilityMatrix from '../components/TraceabilityMatrix';
 
 interface TabPanelProps {
     children?: React.ReactNode;
@@ -191,6 +193,12 @@ export default function ProjectDetailPage() {
         enabled: !!id && tab === 3,
     });
 
+    const { data: traceabilityData, isLoading: traceabilityLoading } = useQuery({
+        queryKey: ['traceability', id],
+        queryFn: () => traceabilityApi.getMatrix(id!),
+        enabled: !!id && tab === 4,
+    });
+
     // Upload model
     const handleModelUpload = async (file: File) => {
         if (!modelName.trim()) {
@@ -313,6 +321,14 @@ export default function ProjectDetailPage() {
                 >
                     Run Validation
                 </Button>
+                <Button
+                    variant="outlined"
+                    startIcon={<TraceIcon />}
+                    onClick={() => navigate(`/projects/${id}/traceability`)}
+                    sx={{ ml: 1 }}
+                >
+                    Traceability
+                </Button>
             </Box>
 
             {/* Tabs */}
@@ -321,6 +337,7 @@ export default function ProjectDetailPage() {
                 <Tab icon={<DatasetIcon />} iconPosition="start" label={`Datasets (${datasets?.length || 0})`} />
                 <Tab icon={<RequirementIcon />} iconPosition="start" label={`Requirements (${savedRequirements.length})`} />
                 <Tab icon={<ValidationIcon />} iconPosition="start" label="Validations" />
+                <Tab icon={<TraceIcon />} iconPosition="start" label="Traceability" />
             </Tabs>
 
             {/* Models Tab */}
@@ -690,6 +707,25 @@ export default function ProjectDetailPage() {
                         </TableContainer>
                     </>
                 )}
+            </TabPanel>
+
+            {/* Traceability Tab */}
+            <TabPanel value={tab} index={4}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                    <Typography variant="h6">Requirement Traceability Matrix</Typography>
+                    <Button
+                        variant="outlined"
+                        startIcon={<TraceIcon />}
+                        onClick={() => navigate(`/projects/${id}/traceability`)}
+                    >
+                        Full Traceability View
+                    </Button>
+                </Box>
+                <TraceabilityMatrix
+                    traces={traceabilityData?.traces || []}
+                    loading={traceabilityLoading}
+                    onViewRootCause={(validationId) => navigate(`/projects/${id}/traceability?rootCause=${validationId}`)}
+                />
             </TabPanel>
 
             {/* Upload Model Dialog */}

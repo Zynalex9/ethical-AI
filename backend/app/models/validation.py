@@ -7,8 +7,8 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from sqlalchemy import String, DateTime, ForeignKey, Boolean, Float, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import String, Text, DateTime, ForeignKey, Boolean, Float, func
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -56,10 +56,10 @@ class Validation(Base):
         primary_key=True,
         default=uuid.uuid4
     )
-    requirement_id: Mapped[uuid.UUID] = mapped_column(
+    requirement_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("requirements.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("requirements.id", ondelete="SET NULL"),
+        nullable=True,
         index=True
     )
     model_id: Mapped[uuid.UUID] = mapped_column(
@@ -104,6 +104,19 @@ class Validation(Base):
         String(1000),
         nullable=True
     )
+    # Phase 3: traceability fields
+    behavior_pattern: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+    affected_groups: Mapped[Optional[List[str]]] = mapped_column(
+        ARRAY(String),
+        nullable=True
+    )
+    feature_contributions: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -111,7 +124,7 @@ class Validation(Base):
     )
     
     # Relationships
-    requirement: Mapped["Requirement"] = relationship(
+    requirement: Mapped[Optional["Requirement"]] = relationship(
         "Requirement",
         back_populates="validations"
     )

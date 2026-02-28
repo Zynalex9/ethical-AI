@@ -20,6 +20,7 @@ import TransparencyDetailPage from './pages/TransparencyDetailPage';
 import TemplatesPage from './pages/TemplatesPage';
 import AuditLogPage from './pages/AuditLogPage';
 import RequirementElicitationPage from './pages/RequirementElicitationPage';
+import TraceabilityPage from './pages/TraceabilityPage';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -145,6 +146,7 @@ function AppRoutes() {
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="projects/:id/validate" element={<ValidationPage />} />
         <Route path="projects/:id/requirements/elicit" element={<RequirementElicitationPage />} />
+        <Route path="projects/:id/traceability" element={<TraceabilityPage />} />
         <Route path="validations" element={<ValidationPage />} />
         <Route path="validations/:validationId/privacy" element={<PrivacyDetailPage />} />
         <Route path="validations/:validationId/transparency" element={<TransparencyDetailPage />} />

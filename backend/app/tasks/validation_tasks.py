@@ -1026,7 +1026,8 @@ def run_all_validations_task(
     transparency_config: Dict[str, Any],
     privacy_config: Dict[str, Any],
     user_id: Optional[str] = None,
-    selected_validations: Optional[list] = None
+    selected_validations: Optional[list] = None,
+    requirement_ids: Optional[list] = None
 ) -> Dict[str, Any]:
     """
     Run selected validations in sequence.
@@ -1066,6 +1067,18 @@ def run_all_validations_task(
                 )
                 suite = result.scalar_one()
 
+                # Build a mapping from principle → requirement_id for linking
+                principle_to_requirement_id: Dict[str, UUID] = {}
+                if requirement_ids:
+                    from app.models.requirement import Requirement
+                    for rid_str in requirement_ids:
+                        req_result = await db.execute(
+                            select(Requirement).where(Requirement.id == UUID(rid_str))
+                        )
+                        req_obj = req_result.scalar_one_or_none()
+                        if req_obj:
+                            principle_to_requirement_id[req_obj.principle] = req_obj.id
+
                 results = {
                     "suite_id": suite_id,
                     "validations": {}
@@ -1081,6 +1094,7 @@ def run_all_validations_task(
                     fairness_validation = Validation(
                         model_id=UUID(model_id),
                         dataset_id=UUID(dataset_id),
+                        requirement_id=principle_to_requirement_id.get("fairness"),
                         status=ValidationStatus.PENDING,
                         progress=0
                     )
@@ -1118,6 +1132,7 @@ def run_all_validations_task(
                     transparency_validation = Validation(
                         model_id=UUID(model_id),
                         dataset_id=UUID(dataset_id),
+                        requirement_id=principle_to_requirement_id.get("transparency"),
                         status=ValidationStatus.PENDING,
                         progress=0
                     )
@@ -1155,6 +1170,7 @@ def run_all_validations_task(
                     privacy_validation = Validation(
                         model_id=UUID(model_id) if model_id else None,
                         dataset_id=UUID(dataset_id),
+                        requirement_id=principle_to_requirement_id.get("privacy"),
                         status=ValidationStatus.PENDING,
                         progress=0
                     )

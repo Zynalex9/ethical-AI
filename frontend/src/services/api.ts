@@ -185,6 +185,7 @@ export const validationApi = {
             quasi_identifiers?: string[];
             sensitive_attribute?: string;
         };
+        requirement_ids?: string[];
     }) => {
         const response = await api.post('/validate/all', data);
         return response.data;
@@ -347,6 +348,33 @@ export const auditApi = {
 
     get: async (id: string) => {
         const response = await api.get(`/audit/${id}`);
+        return response.data;
+    },
+};
+
+// Traceability API – Phase 3
+export const traceabilityApi = {
+    /** Full Requirement Traceability Matrix for a project */
+    getMatrix: async (projectId: string) => {
+        const response = await api.get(`/traceability/project/${projectId}/matrix`);
+        return response.data;
+    },
+
+    /** Compliance history for a single requirement */
+    getRequirementHistory: async (requirementId: string) => {
+        const response = await api.get(`/traceability/requirement/${requirementId}/history`);
+        return response.data;
+    },
+
+    /** Root-cause analysis for a validation run */
+    getRootCause: async (validationId: string) => {
+        const response = await api.get(`/traceability/validation/${validationId}/root-cause`);
+        return response.data;
+    },
+
+    /** Impact of a dataset on requirements and validations */
+    getDatasetImpact: async (datasetId: string) => {
+        const response = await api.get(`/traceability/dataset/${datasetId}/impact`);
         return response.data;
     },
 };

@@ -48,7 +48,7 @@ import {
     ArrowForward as NextIcon,
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
-import { modelsApi, datasetsApi, validationApi } from '../services/api';
+import { modelsApi, datasetsApi, validationApi, requirementsApi } from '../services/api';
 
 // ─── Validator definitions ────────────────────────────────────────────────────
 interface ValidatorDef {
@@ -126,7 +126,7 @@ const VALIDATORS: ValidatorDef[] = [
     },
 ];
 
-const STEPS = ['Select Validations', 'Configure & Run', 'Results'];
+const STEPS = ['Select Validations', 'Configure & Run', 'Select Requirements', 'Results'];
 
 const FAIRNESS_METRICS = [
     { key: 'demographic_parity_ratio', label: 'Demographic Parity Ratio', defaultThreshold: 0.8 },
@@ -188,6 +188,10 @@ export default function ValidationPage() {
     const [lDiversityL, setLDiversityL] = useState<number>(2);
     const [formError, setFormError] = useState('');
 
+    // Requirements selection
+    const [selectedRequirements, setSelectedRequirements] = useState<string[]>([]);
+    const [useRequirementThresholds, setUseRequirementThresholds] = useState(false);
+
     // Run state
     const [isRunning, setIsRunning] = useState(false);
     const [taskId, setTaskId] = useState('');
@@ -208,7 +212,7 @@ export default function ValidationPage() {
                     const suiteResults = await validationApi.getSuiteResults(viewSuiteId);
                     setResults(suiteResults);
                     setSuiteId(viewSuiteId);
-                    setActiveStep(2);
+                    setActiveStep(3);
                 } catch (err: any) {
                     setRunError(err.message || 'Failed to load validation results');
                 }
@@ -224,6 +228,11 @@ export default function ValidationPage() {
     const { data: datasets } = useQuery({
         queryKey: ['datasets', id],
         queryFn: () => datasetsApi.list(id!),
+        enabled: !!id,
+    });
+    const { data: requirements } = useQuery({
+        queryKey: ['requirements', id],
+        queryFn: () => requirementsApi.listByProject(id!),
         enabled: !!id,
     });
     const selectedDatasetObj = datasets?.find((d: any) => d.id === selectedDataset);
@@ -242,7 +251,7 @@ export default function ValidationPage() {
                         setResults(suiteResults);
                     }
                     setIsRunning(false);
-                    setActiveStep(2);
+                    setActiveStep(3);
                     clearInterval(interval);
                 } else if (status.state === 'FAILURE') {
                     setRunError(status.error || 'Validation failed');
@@ -296,6 +305,46 @@ export default function ValidationPage() {
         return '';
     };
 
+    // Filter requirements by selected validators' principles
+    const relevantRequirements = (requirements || []).filter((r: any) =>
+        selectedValidators.includes(r.principle) && r.status !== 'archived'
+    );
+
+    const toggleRequirement = (reqId: string) =>
+        setSelectedRequirements((prev) =>
+            prev.includes(reqId) ? prev.filter((id) => id !== reqId) : [...prev, reqId]
+        );
+
+    // Apply thresholds from selected requirements to fairness/privacy config
+    const applyRequirementThresholds = () => {
+        const selected = (requirements || []).filter((r: any) => selectedRequirements.includes(r.id));
+        const newThresholds = { ...fairnessThresholds };
+        let newK = kAnonymityK;
+        let newL = lDiversityL;
+
+        for (const req of selected) {
+            const rules = req.specification?.rules || [];
+            for (const rule of rules) {
+                // For fairness metrics
+                if (rule.metric && newThresholds[rule.metric] !== undefined) {
+                    newThresholds[rule.metric] = rule.value;
+                }
+                // For privacy thresholds
+                if (rule.metric === 'k_anonymity_k' || rule.metric === 'k_value') {
+                    newK = rule.value;
+                }
+                if (rule.metric === 'l_diversity_l' || rule.metric === 'l_value') {
+                    newL = rule.value;
+                }
+            }
+        }
+
+        setFairnessThresholds(newThresholds);
+        setKAnonymityK(newK);
+        setLDiversityL(newL);
+        setUseRequirementThresholds(true);
+    };
+
     const handleRun = async (skipWarning = false) => {
         const configErr = validateConfig();
         if (configErr) { setFormError(configErr); return; }
@@ -330,6 +379,7 @@ export default function ValidationPage() {
                     quasi_identifiers: quasiIdentifiers.length > 0 ? quasiIdentifiers : undefined,
                     sensitive_attribute: sensitiveAttribute || undefined,
                 },
+                requirement_ids: selectedRequirements.length > 0 ? selectedRequirements : undefined,
             });
             setTaskId(response.task_id);
             setSuiteId(response.suite_id);
@@ -362,6 +412,8 @@ export default function ValidationPage() {
         setSelectedPrivacyChecks(['pii_detection', 'k_anonymity']);
         setKAnonymityK(5);
         setLDiversityL(2);
+        setSelectedRequirements([]);
+        setUseRequirementThresholds(false);
         setIsRunning(false);
         setTaskId('');
         setSuiteId('');
@@ -820,10 +872,179 @@ export default function ValidationPage() {
                                 <Button variant="outlined" startIcon={<BackIcon />} onClick={() => setActiveStep(0)}>
                                     Back
                                 </Button>
-                                <Button variant="contained" size="large" startIcon={<RunIcon />} onClick={() => handleRun()}>
-                                    Run {selectedValidators.length === VALIDATORS.length ? 'All' : selectedValidators.length}{' '}
-                                    Validation{selectedValidators.length !== 1 ? 's' : ''}
+                                <Button
+                                    variant="contained"
+                                    size="large"
+                                    endIcon={<NextIcon />}
+                                    onClick={() => {
+                                        const configErr = validateConfig();
+                                        if (configErr) { setFormError(configErr); return; }
+                                        setFormError('');
+                                        setActiveStep(2);
+                                    }}
+                                >
+                                    Next: Select Requirements
                                 </Button>
+                            </Box>
+                        </CardContent>
+                    </Card>
+                )}
+
+                {/* ── STEP 2: SELECT REQUIREMENTS ─────────────────────────── */}
+                {activeStep === 2 && !isRunning && (
+                    <Card>
+                        <CardContent sx={{ p: 4 }}>
+                            <Typography variant="h6" gutterBottom sx={{ fontWeight: 700 }}>
+                                Link Requirements to Validation
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                                Select the ethical requirements you want to validate against. Thresholds will be automatically
+                                populated from the requirement specifications. You can also skip this step and run with manual thresholds.
+                            </Typography>
+
+                            {relevantRequirements.length === 0 ? (
+                                <Alert severity="info" sx={{ mb: 3 }}>
+                                    No requirements found for the selected validation types ({selectedValidators.join(', ')}).
+                                    You can still run the validation with the thresholds configured in the previous step.
+                                </Alert>
+                            ) : (
+                                <>
+                                    <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                                        <Button
+                                            size="small"
+                                            startIcon={<CheckBoxIcon />}
+                                            onClick={() => setSelectedRequirements(relevantRequirements.map((r: any) => r.id))}
+                                        >
+                                            Select All
+                                        </Button>
+                                        <Button
+                                            size="small"
+                                            startIcon={<CheckBoxBlankIcon />}
+                                            color="inherit"
+                                            onClick={() => setSelectedRequirements([])}
+                                        >
+                                            Clear
+                                        </Button>
+                                    </Box>
+
+                                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 3 }}>
+                                        {relevantRequirements.map((req: any) => {
+                                            const isSelected = selectedRequirements.includes(req.id);
+                                            const principleColors: Record<string, { color: string; bg: string; border: string }> = {
+                                                fairness: { color: '#2e7d32', bg: '#f1f8e9', border: '#4caf50' },
+                                                transparency: { color: '#1565c0', bg: '#e3f2fd', border: '#2196f3' },
+                                                privacy: { color: '#e65100', bg: '#fff3e0', border: '#ff9800' },
+                                                accountability: { color: '#6a1b9a', bg: '#f3e5f5', border: '#9c27b0' },
+                                            };
+                                            const colors = principleColors[req.principle] || principleColors.fairness;
+                                            const rules = req.specification?.rules || [];
+                                            return (
+                                                <Card
+                                                    key={req.id}
+                                                    variant="outlined"
+                                                    onClick={() => toggleRequirement(req.id)}
+                                                    sx={{
+                                                        cursor: 'pointer',
+                                                        borderColor: isSelected ? colors.border : 'divider',
+                                                        bgcolor: isSelected ? colors.bg : 'background.paper',
+                                                        transition: 'all 0.2s',
+                                                        '&:hover': { borderColor: colors.border },
+                                                    }}
+                                                >
+                                                    <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                                                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+                                                            <Box sx={{ color: isSelected ? colors.color : 'text.disabled', mt: 0.2 }}>
+                                                                {isSelected ? <CheckBoxIcon /> : <CheckBoxBlankIcon />}
+                                                            </Box>
+                                                            <Box sx={{ flex: 1 }}>
+                                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                                                                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                                                                        {req.name}
+                                                                    </Typography>
+                                                                    <Chip
+                                                                        label={req.principle}
+                                                                        size="small"
+                                                                        sx={{ bgcolor: colors.bg, color: colors.color, border: `1px solid ${colors.border}`, fontWeight: 600, textTransform: 'capitalize' }}
+                                                                    />
+                                                                    {req.elicited_automatically && (
+                                                                        <Chip label="Auto-elicited" size="small" variant="outlined" color="info" />
+                                                                    )}
+                                                                </Box>
+                                                                {req.description && (
+                                                                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                                                        {req.description}
+                                                                    </Typography>
+                                                                )}
+                                                                {rules.length > 0 && (
+                                                                    <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                                                                        {rules.map((rule: any, i: number) => (
+                                                                            <Chip
+                                                                                key={i}
+                                                                                label={`${(rule.metric || '').replace(/_/g, ' ')} ${rule.operator} ${rule.value}`}
+                                                                                size="small"
+                                                                                variant="outlined"
+                                                                                sx={{ fontSize: '0.75rem' }}
+                                                                            />
+                                                                        ))}
+                                                                    </Box>
+                                                                )}
+                                                            </Box>
+                                                        </Box>
+                                                    </CardContent>
+                                                </Card>
+                                            );
+                                        })}
+                                    </Box>
+
+                                    {selectedRequirements.length > 0 && !useRequirementThresholds && (
+                                        <Alert severity="info" sx={{ mb: 2 }}>
+                                            <Typography variant="body2">
+                                                <strong>{selectedRequirements.length}</strong> requirement(s) selected.
+                                                Click "Apply Thresholds" to use the thresholds defined in these requirements
+                                                instead of the manually configured values.
+                                            </Typography>
+                                            <Button
+                                                size="small"
+                                                variant="outlined"
+                                                sx={{ mt: 1 }}
+                                                onClick={(e) => { e.stopPropagation(); applyRequirementThresholds(); }}
+                                            >
+                                                Apply Thresholds from Requirements
+                                            </Button>
+                                        </Alert>
+                                    )}
+
+                                    {useRequirementThresholds && (
+                                        <Alert severity="success" sx={{ mb: 2 }}>
+                                            Thresholds have been applied from the selected requirements.
+                                        </Alert>
+                                    )}
+                                </>
+                            )}
+
+                            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between' }}>
+                                <Button variant="outlined" startIcon={<BackIcon />} onClick={() => setActiveStep(1)}>
+                                    Back
+                                </Button>
+                                <Box sx={{ display: 'flex', gap: 2 }}>
+                                    {relevantRequirements.length > 0 && selectedRequirements.length === 0 && (
+                                        <Button
+                                            variant="outlined"
+                                            onClick={() => handleRun()}
+                                        >
+                                            Skip – Use Manual Thresholds
+                                        </Button>
+                                    )}
+                                    <Button
+                                        variant="contained"
+                                        size="large"
+                                        startIcon={<RunIcon />}
+                                        onClick={() => handleRun()}
+                                    >
+                                        Run {selectedValidators.length === VALIDATORS.length ? 'All' : selectedValidators.length}{' '}
+                                        Validation{selectedValidators.length !== 1 ? 's' : ''}
+                                    </Button>
+                                </Box>
                             </Box>
                         </CardContent>
                     </Card>
@@ -853,8 +1074,8 @@ export default function ValidationPage() {
                     </Paper>
                 )}
 
-                {/* ── STEP 2: RESULTS ───────────────────────────────────────── */}
-                {activeStep === 2 && results && (
+                {/* ── STEP 3: RESULTS ───────────────────────────────────────── */}
+                {activeStep === 3 && results && (
                     <Box>
                         <Alert
                             severity={results.overall_passed ? 'success' : 'warning'}
