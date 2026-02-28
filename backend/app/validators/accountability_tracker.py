@@ -142,25 +142,33 @@ class AccountabilityTracker:
     def _init_mlflow(self) -> None:
         """Initialize MLflow tracking."""
         try:
-            import mlflow
+            import mlflow # type: ignore
             self._mlflow = mlflow
             
             # Set tracking URI
             mlflow.set_tracking_uri(self.tracking_uri)
+            logger.info(f"MLflow tracking URI set to: {self.tracking_uri}")
             
             # Create or get experiment
             experiment = mlflow.get_experiment_by_name(self.experiment_name)
             if experiment is None:
                 self._experiment_id = mlflow.create_experiment(self.experiment_name)
+                logger.info(f"Created new MLflow experiment: '{self.experiment_name}' (ID: {self._experiment_id})")
             else:
                 self._experiment_id = experiment.experiment_id
+                logger.info(f"Using existing MLflow experiment: '{self.experiment_name}' (ID: {self._experiment_id})")
             
             mlflow.set_experiment(self.experiment_name)
             
-            logger.info(f"MLflow initialized with experiment '{self.experiment_name}'")
+            logger.info(f"✅ MLflow initialized successfully with experiment '{self.experiment_name}'")
             
-        except ImportError:
-            logger.warning("MLflow not installed. Running without experiment tracking.")
+        except ImportError as e:
+            logger.error(f"❌ MLflow not installed: {e}")
+            logger.warning("Running without experiment tracking. Install with: pip install mlflow")
+            self.use_mlflow = False
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize MLflow: {e}", exc_info=True)
+            logger.warning("Running without experiment tracking.")
             self.use_mlflow = False
     
     def start_validation_run(
@@ -289,18 +297,18 @@ class AccountabilityTracker:
             data: Dictionary to log
             filename: Name for the JSON file
         """
-        # FIX: Complete rewrite with better error handling and debugging
+        # Gracefully skip if MLflow is disabled (consistent with log_metrics and log_artifact)
         if not self.use_mlflow:
-            logger.warning(f"❌ MLflow disabled, cannot save {filename}")
-            raise RuntimeError(f"MLflow disabled, cannot save {filename}")
+            logger.warning(f"MLflow disabled, skipping save of {filename}")
+            return
             
         if not self._mlflow:
-            logger.error(f"❌ MLflow client not initialized, cannot save {filename}")
-            raise RuntimeError(f"MLflow client not initialized, cannot save {filename}")
+            logger.warning(f"MLflow client not initialized, skipping save of {filename}")
+            return
             
         if not self._current_run:
-            logger.error(f"❌ No active MLflow run, cannot save {filename}")
-            raise RuntimeError(f"No active MLflow run, cannot save {filename}")
+            logger.warning(f"No active MLflow run, skipping save of {filename}")
+            return
         
         try:
             run_id = self._current_run.info.run_id
