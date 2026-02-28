@@ -399,4 +399,40 @@ export const traceabilityApi = {
     },
 };
 
+// Reports API – Phase 4
+export const reportsApi = {
+    getValidationReport: async (suiteId: string) => {
+        const response = await api.get(`/reports/validation/${suiteId}`);
+        return response.data;
+    },
+
+    downloadValidationPdf: async (suiteId: string) => {
+        const response = await api.get(`/reports/validation/${suiteId}/pdf`, {
+            responseType: 'blob',
+        });
+        return response.data as Blob;
+    },
+
+    getComplianceReport: async (projectId: string) => {
+        const response = await api.get(`/reports/project/${projectId}/compliance`);
+        return response.data;
+    },
+
+    downloadCompliancePdf: async (projectId: string) => {
+        const response = await api.get(`/reports/project/${projectId}/compliance/pdf`, {
+            responseType: 'blob',
+        });
+        return response.data as Blob;
+    },
+
+    generateCustomReport: async (data: {
+        project_id: string;
+        include_sections?: string[];
+        date_range?: Record<string, string>;
+    }) => {
+        const response = await api.post('/reports/custom', data);
+        return response.data;
+    },
+};
+
 export default api;

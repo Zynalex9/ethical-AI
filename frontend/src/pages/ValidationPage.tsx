@@ -48,7 +48,7 @@ import {
     ArrowForward as NextIcon,
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
-import { modelsApi, datasetsApi, validationApi, requirementsApi } from '../services/api';
+import { modelsApi, datasetsApi, validationApi, requirementsApi, reportsApi } from '../services/api';
 
 // ─── Validator definitions ────────────────────────────────────────────────────
 interface ValidatorDef {
@@ -422,6 +422,22 @@ export default function ValidationPage() {
         setResults(null);
         setRunError('');
         setFormError('');
+    };
+
+    const handleDownloadSuitePdf = async () => {
+        const activeSuiteId = results?.suite_id || suiteId;
+        if (!activeSuiteId) return;
+        try {
+            const blob = await reportsApi.downloadValidationPdf(activeSuiteId);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `validation_report_${activeSuiteId}.pdf`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (err: any) {
+            setRunError(err?.message || 'Failed to download PDF report');
+        }
     };
 
     return (
@@ -1258,6 +1274,18 @@ export default function ValidationPage() {
                         <Box sx={{ mt: 4, display: 'flex', gap: 2 }}>
                             <Button variant="outlined" onClick={() => navigate(`/projects/${id}`)}>
                                 Back to Project
+                            </Button>
+                            <Button
+                                variant="outlined"
+                                onClick={() => {
+                                    const activeSuiteId = results?.suite_id || suiteId;
+                                    if (activeSuiteId) navigate(`/reports/validation/${activeSuiteId}`);
+                                }}
+                            >
+                                View Full Report
+                            </Button>
+                            <Button variant="outlined" onClick={handleDownloadSuitePdf}>
+                                Download PDF
                             </Button>
                             <Button variant="contained" startIcon={<RefreshIcon />} onClick={handleReset}>
                                 Run Another Validation

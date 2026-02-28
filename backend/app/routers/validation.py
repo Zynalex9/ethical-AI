@@ -2,6 +2,7 @@
 
 import os
 import logging
+import math
 from typing import List, Optional, Dict, Any
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
@@ -30,6 +31,22 @@ from ..validators.privacy_validator import PrivacyValidator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/validate", tags=["validation"])
+
+
+def _json_safe(obj: Any) -> Any:
+    """Recursively sanitize objects for strict JSON serialization.
+
+    Converts non-finite floats (NaN/Inf) to None so Starlette can serialize.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_json_safe(v) for v in obj)
+    return obj
 
 
 # Request/Response models
@@ -955,7 +972,7 @@ async def get_suite_results(
                 "completed_at": privacy_val.completed_at.isoformat() if privacy_val.completed_at else None
             }
     
-    return response
+    return _json_safe(response)
 
 
 @router.get("/suite/{suite_id}/privacy-details")
