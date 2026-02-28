@@ -574,6 +574,7 @@ class FairnessValidator:
     def validate_all(
         self,
         thresholds: Optional[Dict[str, float]] = None,
+        selected_metrics: Optional[List[str]] = None,
         include_visualizations: bool = True
     ) -> FairnessReport:
         """
@@ -582,22 +583,39 @@ class FairnessValidator:
         Args:
             thresholds: Dictionary mapping metric names to threshold values.
                        Uses defaults for any not specified.
+            selected_metrics: Optional subset of supported fairness metric names.
+                              If None/empty, all supported metrics are run.
             include_visualizations: Whether to generate visualization plots
             
         Returns:
             FairnessReport with all metrics and optional visualizations
         """
         thresholds = {**self.DEFAULT_THRESHOLDS, **(thresholds or {})}
-        
-        # Calculate all metrics
-        metrics = [
-            self.demographic_parity(thresholds.get('demographic_parity_ratio')),
-            self.demographic_parity_diff(thresholds.get('demographic_parity_difference')),
-            self.equalized_odds(thresholds.get('equalized_odds_ratio'), use_ratio=True),
-            self.equalized_odds(thresholds.get('equalized_odds_difference'), use_ratio=False),
-            self.equal_opportunity(thresholds.get('equal_opportunity_difference')),
-            self.disparate_impact(thresholds.get('disparate_impact_ratio'))
-        ]
+
+        metric_runners = {
+            "demographic_parity_ratio": lambda: self.demographic_parity(thresholds.get("demographic_parity_ratio")),
+            "demographic_parity_difference": lambda: self.demographic_parity_diff(thresholds.get("demographic_parity_difference")),
+            "equalized_odds_ratio": lambda: self.equalized_odds(thresholds.get("equalized_odds_ratio"), use_ratio=True),
+            "equalized_odds_difference": lambda: self.equalized_odds(thresholds.get("equalized_odds_difference"), use_ratio=False),
+            "equal_opportunity_difference": lambda: self.equal_opportunity(thresholds.get("equal_opportunity_difference")),
+            "disparate_impact_ratio": lambda: self.disparate_impact(thresholds.get("disparate_impact_ratio")),
+        }
+
+        if selected_metrics:
+            ordered_selected = [
+                metric_name for metric_name in selected_metrics
+                if metric_name in metric_runners
+            ]
+        else:
+            ordered_selected = list(metric_runners.keys())
+
+        if not ordered_selected:
+            raise ValueError(
+                "No supported fairness metrics selected. "
+                f"Choose from: {list(metric_runners.keys())}"
+            )
+
+        metrics = [metric_runners[metric_name]() for metric_name in ordered_selected]
         
         # Calculate confusion matrices
         confusion_matrices = self.compute_group_confusion_matrices()

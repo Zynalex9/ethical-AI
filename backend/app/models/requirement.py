@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, func
+from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Boolean, Float, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -100,6 +100,21 @@ class Requirement(Base):
         Integer,
         default=1,
         nullable=False
+    )
+    # Phase 2: auto-elicitation fields
+    elicited_automatically: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        server_default='false'
+    )
+    elicitation_reason: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+    confidence_score: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

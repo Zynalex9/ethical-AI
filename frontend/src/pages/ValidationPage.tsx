@@ -27,6 +27,10 @@ import {
     Stepper,
     Step,
     StepLabel,
+    FormGroup,
+    FormControlLabel,
+    Checkbox,
+    TextField,
 } from '@mui/material';
 import {
     ArrowBack as BackIcon,
@@ -124,6 +128,21 @@ const VALIDATORS: ValidatorDef[] = [
 
 const STEPS = ['Select Validations', 'Configure & Run', 'Results'];
 
+const FAIRNESS_METRICS = [
+    { key: 'demographic_parity_ratio', label: 'Demographic Parity Ratio', defaultThreshold: 0.8 },
+    { key: 'demographic_parity_difference', label: 'Demographic Parity Difference', defaultThreshold: 0.1 },
+    { key: 'equalized_odds_ratio', label: 'Equalized Odds Ratio', defaultThreshold: 0.8 },
+    { key: 'equalized_odds_difference', label: 'Equalized Odds Difference', defaultThreshold: 0.1 },
+    { key: 'equal_opportunity_difference', label: 'Equal Opportunity Difference', defaultThreshold: 0.1 },
+    { key: 'disparate_impact_ratio', label: 'Disparate Impact Ratio', defaultThreshold: 0.8 },
+];
+
+const PRIVACY_CHECKS = [
+    { key: 'pii_detection', label: 'PII Detection' },
+    { key: 'k_anonymity', label: 'k-Anonymity' },
+    { key: 'l_diversity', label: 'l-Diversity' },
+];
+
 const PassChip = ({ passed }: { passed: boolean }) => (
     <Chip label={passed ? '✓ Pass' : '✗ Fail'} color={passed ? 'success' : 'error'} size="small" />
 );
@@ -148,6 +167,25 @@ export default function ValidationPage() {
     const [targetColumn, setTargetColumn] = useState('');
     const [quasiIdentifiers, setQuasiIdentifiers] = useState<string[]>([]);
     const [sensitiveAttribute, setSensitiveAttribute] = useState('');
+    const [selectedFairnessMetrics, setSelectedFairnessMetrics] = useState<string[]>([
+        'demographic_parity_ratio',
+        'equalized_odds_ratio',
+        'disparate_impact_ratio',
+    ]);
+    const [fairnessThresholds, setFairnessThresholds] = useState<Record<string, number>>({
+        demographic_parity_ratio: 0.8,
+        demographic_parity_difference: 0.1,
+        equalized_odds_ratio: 0.8,
+        equalized_odds_difference: 0.1,
+        equal_opportunity_difference: 0.1,
+        disparate_impact_ratio: 0.8,
+    });
+    const [selectedPrivacyChecks, setSelectedPrivacyChecks] = useState<string[]>([
+        'pii_detection',
+        'k_anonymity',
+    ]);
+    const [kAnonymityK, setKAnonymityK] = useState<number>(5);
+    const [lDiversityL, setLDiversityL] = useState<number>(2);
     const [formError, setFormError] = useState('');
 
     // Run state
@@ -223,13 +261,38 @@ export default function ValidationPage() {
     const toggleValidator = (key: string) =>
         setSelectedValidators((prev) => prev.includes(key) ? prev.filter((v) => v !== key) : [...prev, key]);
 
+    const toggleFairnessMetric = (metric: string) =>
+        setSelectedFairnessMetrics((prev) =>
+            prev.includes(metric) ? prev.filter((m) => m !== metric) : [...prev, metric]
+        );
+
+    const togglePrivacyCheck = (check: string) =>
+        setSelectedPrivacyChecks((prev) =>
+            prev.includes(check) ? prev.filter((c) => c !== check) : [...prev, check]
+        );
+
     const needsSensitiveFeature = selectedValidators.includes('fairness');
     const needsModel = selectedValidators.includes('fairness') || selectedValidators.includes('transparency');
+    const needsQuasiIdentifiers = selectedPrivacyChecks.includes('k_anonymity') || selectedPrivacyChecks.includes('l_diversity');
+    const needsSensitiveAttribute = selectedPrivacyChecks.includes('l_diversity');
 
     const validateConfig = () => {
         if (!selectedDataset) return 'Please select a dataset.';
         if (needsModel && !selectedModel) return 'Please select a model (required for Fairness / Transparency).';
         if (needsSensitiveFeature && !sensitiveFeature) return 'Please select a Sensitive Feature (required for Fairness).';
+        if (selectedValidators.includes('fairness') && selectedFairnessMetrics.length === 0) {
+            return 'Please select at least one fairness metric.';
+        }
+        if (selectedValidators.includes('privacy') && selectedPrivacyChecks.length === 0) {
+            return 'Please select at least one privacy check.';
+        }
+        if (selectedValidators.includes('privacy') && selectedPrivacyChecks.includes('k_anonymity') && quasiIdentifiers.length === 0) {
+            return 'Please select Quasi-Identifiers for k-anonymity.';
+        }
+        if (selectedValidators.includes('privacy') && selectedPrivacyChecks.includes('l_diversity')) {
+            if (quasiIdentifiers.length === 0) return 'Please select Quasi-Identifiers for l-diversity.';
+            if (!sensitiveAttribute) return 'Please select Sensitive Attribute for l-diversity.';
+        }
         return '';
     };
 
@@ -253,12 +316,17 @@ export default function ValidationPage() {
                 fairness_config: {
                     sensitive_feature: sensitiveFeature,
                     target_column: targetColumn || null,
-                    thresholds: { demographic_parity_ratio: 0.8, equalized_odds_ratio: 0.8, disparate_impact_ratio: 0.8 },
+                    selected_metrics: selectedFairnessMetrics,
+                    thresholds: selectedFairnessMetrics.reduce((acc, metricName) => {
+                        acc[metricName] = fairnessThresholds[metricName];
+                        return acc;
+                    }, {} as Record<string, number>),
                 },
                 transparency_config: { target_column: targetColumn || null, sample_size: 100 },
                 privacy_config: {
-                    k_anonymity_k: 5,
-                    l_diversity_l: 2,
+                    selected_checks: selectedPrivacyChecks,
+                    k_anonymity_k: kAnonymityK,
+                    l_diversity_l: lDiversityL,
                     quasi_identifiers: quasiIdentifiers.length > 0 ? quasiIdentifiers : undefined,
                     sensitive_attribute: sensitiveAttribute || undefined,
                 },
@@ -282,6 +350,18 @@ export default function ValidationPage() {
         setTargetColumn('');
         setQuasiIdentifiers([]);
         setSensitiveAttribute('');
+        setSelectedFairnessMetrics(['demographic_parity_ratio', 'equalized_odds_ratio', 'disparate_impact_ratio']);
+        setFairnessThresholds({
+            demographic_parity_ratio: 0.8,
+            demographic_parity_difference: 0.1,
+            equalized_odds_ratio: 0.8,
+            equalized_odds_difference: 0.1,
+            equal_opportunity_difference: 0.1,
+            disparate_impact_ratio: 0.8,
+        });
+        setSelectedPrivacyChecks(['pii_detection', 'k_anonymity']);
+        setKAnonymityK(5);
+        setLDiversityL(2);
         setIsRunning(false);
         setTaskId('');
         setSuiteId('');
@@ -574,6 +654,51 @@ export default function ValidationPage() {
                                                 )}
                                             </Box>
                                         </Box>
+
+                                        <Box>
+                                            <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                Fairness Metrics to Run
+                                            </Typography>
+                                            <FormGroup row>
+                                                {FAIRNESS_METRICS.map((metric) => (
+                                                    <FormControlLabel
+                                                        key={metric.key}
+                                                        control={
+                                                            <Checkbox
+                                                                checked={selectedFairnessMetrics.includes(metric.key)}
+                                                                onChange={() => toggleFairnessMetric(metric.key)}
+                                                            />
+                                                        }
+                                                        label={metric.label}
+                                                    />
+                                                ))}
+                                            </FormGroup>
+                                        </Box>
+
+                                        {selectedFairnessMetrics.length > 0 && (
+                                            <Box>
+                                                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                    Thresholds (editable)
+                                                </Typography>
+                                                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                                                    {FAIRNESS_METRICS.filter((metric) => selectedFairnessMetrics.includes(metric.key)).map((metric) => (
+                                                        <TextField
+                                                            key={metric.key}
+                                                            label={metric.label}
+                                                            type="number"
+                                                            size="small"
+                                                            value={fairnessThresholds[metric.key] ?? metric.defaultThreshold}
+                                                            onChange={(e) => setFairnessThresholds((prev) => ({
+                                                                ...prev,
+                                                                [metric.key]: Number(e.target.value),
+                                                            }))}
+                                                            inputProps={{ step: 0.01 }}
+                                                            sx={{ minWidth: 280 }}
+                                                        />
+                                                    ))}
+                                                </Box>
+                                            </Box>
+                                        )}
                                     </>
                                 )}
 
@@ -583,11 +708,33 @@ export default function ValidationPage() {
                                         <Divider>
                                             <Chip label="Privacy Settings" size="small" sx={{ bgcolor: '#fff3e0', color: '#e65100' }} />
                                         </Divider>
+                                        <Box>
+                                            <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                Privacy Checks to Run
+                                            </Typography>
+                                            <FormGroup row>
+                                                {PRIVACY_CHECKS.map((check) => (
+                                                    <FormControlLabel
+                                                        key={check.key}
+                                                        control={
+                                                            <Checkbox
+                                                                checked={selectedPrivacyChecks.includes(check.key)}
+                                                                onChange={() => togglePrivacyCheck(check.key)}
+                                                            />
+                                                        }
+                                                        label={check.label}
+                                                    />
+                                                ))}
+                                            </FormGroup>
+                                        </Box>
+
                                         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                                             <Box sx={{ flex: '1 1 45%', minWidth: 240 }}>
                                                 <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
                                                     Quasi-Identifiers
-                                                    <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>(optional)</Typography>
+                                                    <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                                                        ({needsQuasiIdentifiers ? 'required by selected checks' : 'enable k-anonymity or l-diversity'})
+                                                    </Typography>
                                                 </Typography>
                                                 <FormControl fullWidth>
                                                     <InputLabel>Select columns</InputLabel>
@@ -596,7 +743,7 @@ export default function ValidationPage() {
                                                         value={quasiIdentifiers}
                                                         label="Select columns"
                                                         onChange={(e) => setQuasiIdentifiers(e.target.value as string[])}
-                                                        disabled={!selectedDataset}
+                                                        disabled={!selectedDataset || !needsQuasiIdentifiers}
                                                         renderValue={(selected) => (
                                                             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                                                                 {selected.map((val) => <Chip key={val} label={val} size="small" />)}
@@ -609,11 +756,28 @@ export default function ValidationPage() {
                                                     </Select>
                                                 </FormControl>
                                             </Box>
+
+                                            {selectedPrivacyChecks.includes('k_anonymity') && (
+                                                <Box sx={{ flex: '1 1 20%', minWidth: 180 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                        k value
+                                                    </Typography>
+                                                    <TextField
+                                                        fullWidth
+                                                        size="small"
+                                                        type="number"
+                                                        value={kAnonymityK}
+                                                        onChange={(e) => setKAnonymityK(Number(e.target.value))}
+                                                        inputProps={{ min: 1, step: 1 }}
+                                                    />
+                                                </Box>
+                                            )}
+
                                             <Box sx={{ flex: '1 1 45%', minWidth: 240 }}>
                                                 <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
                                                     Sensitive Attribute
                                                     <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                                                        (optional – for l-Diversity)
+                                                        ({needsSensitiveAttribute ? 'required for l-diversity' : 'enable l-diversity to edit'})
                                                     </Typography>
                                                 </Typography>
                                                 <FormControl fullWidth>
@@ -622,7 +786,7 @@ export default function ValidationPage() {
                                                         value={sensitiveAttribute}
                                                         label="Select column"
                                                         onChange={(e) => setSensitiveAttribute(e.target.value)}
-                                                        disabled={!selectedDataset}
+                                                        disabled={!selectedDataset || !needsSensitiveAttribute}
                                                     >
                                                         <MenuItem value="">None</MenuItem>
                                                         {selectedDatasetObj?.columns?.map((col: string) => (
@@ -631,6 +795,22 @@ export default function ValidationPage() {
                                                     </Select>
                                                 </FormControl>
                                             </Box>
+
+                                            {selectedPrivacyChecks.includes('l_diversity') && (
+                                                <Box sx={{ flex: '1 1 20%', minWidth: 180 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                        l value
+                                                    </Typography>
+                                                    <TextField
+                                                        fullWidth
+                                                        size="small"
+                                                        type="number"
+                                                        value={lDiversityL}
+                                                        onChange={(e) => setLDiversityL(Number(e.target.value))}
+                                                        inputProps={{ min: 1, step: 1 }}
+                                                    />
+                                                </Box>
+                                            )}
                                         </Box>
                                     </>
                                 )}

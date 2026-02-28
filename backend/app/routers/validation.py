@@ -39,6 +39,7 @@ class FairnessValidationRequest(BaseModel):
     sensitive_feature: str
     target_column: Optional[str] = None  # Optional - if not provided, uses predictions
     thresholds: Optional[Dict[str, float]] = None
+    selected_metrics: Optional[List[str]] = None
 
 
 class TransparencyValidationRequest(BaseModel):
@@ -54,6 +55,7 @@ class PrivacyValidationRequest(BaseModel):
     l_diversity_l: Optional[int] = 2
     quasi_identifiers: Optional[List[str]] = None
     sensitive_attribute: Optional[str] = None
+    selected_checks: Optional[List[str]] = None
 
 
 class ValidationStatusResponse(BaseModel):
@@ -210,7 +212,10 @@ async def run_fairness_validation(
             sensitive_features=sensitive
         )
         
-        report = validator.validate_all(thresholds=thresholds)
+        report = validator.validate_all(
+            thresholds=thresholds,
+            selected_metrics=request.selected_metrics,
+        )
         
         # Update validation status
         validation.status = ValidationStatus.COMPLETED
@@ -445,9 +450,18 @@ async def run_privacy_validation(
         validator = PrivacyValidator(df)
         
         # Build requirements
-        requirements: Dict[str, Any] = {'pii_detection': True}
-        
-        if request.quasi_identifiers:
+        selected_checks = set(c.lower() for c in (request.selected_checks or ['pii_detection', 'k_anonymity', 'l_diversity']))
+        requirements: Dict[str, Any] = {}
+
+        if 'pii_detection' in selected_checks:
+            requirements['pii_detection'] = True
+
+        if 'k_anonymity' in selected_checks:
+            if not request.quasi_identifiers:
+                raise HTTPException(
+                    status_code=400,
+                    detail="k-anonymity selected but quasi_identifiers were not provided"
+                )
             # Validate columns exist
             invalid = set(request.quasi_identifiers) - set(df.columns)
             if invalid:
@@ -459,18 +473,31 @@ async def run_privacy_validation(
                 'k': request.k_anonymity_k,
                 'quasi_identifiers': request.quasi_identifiers
             }
-            
-            if request.sensitive_attribute:
-                if request.sensitive_attribute not in df.columns:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Sensitive attribute '{request.sensitive_attribute}' not found"
-                    )
-                requirements['l_diversity'] = {
-                    'l': request.l_diversity_l,
-                    'quasi_identifiers': request.quasi_identifiers,
-                    'sensitive_attribute': request.sensitive_attribute
-                }
+
+        if 'l_diversity' in selected_checks:
+            if not request.quasi_identifiers:
+                raise HTTPException(
+                    status_code=400,
+                    detail="l-diversity selected but quasi_identifiers were not provided"
+                )
+            if not request.sensitive_attribute:
+                raise HTTPException(
+                    status_code=400,
+                    detail="l-diversity selected but sensitive_attribute was not provided"
+                )
+            if request.sensitive_attribute not in df.columns:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Sensitive attribute '{request.sensitive_attribute}' not found"
+                )
+            requirements['l_diversity'] = {
+                'l': request.l_diversity_l,
+                'quasi_identifiers': request.quasi_identifiers,
+                'sensitive_attribute': request.sensitive_attribute
+            }
+
+        if not requirements:
+            raise HTTPException(status_code=400, detail="No privacy checks selected")
         
         # Run validation
         report = validator.validate(requirements)

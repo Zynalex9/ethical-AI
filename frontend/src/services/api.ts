@@ -171,6 +171,7 @@ export const validationApi = {
         fairness_config: {
             sensitive_feature: string;
             target_column: string | null;
+            selected_metrics?: string[];
             thresholds?: Record<string, number>;
         };
         transparency_config: {
@@ -178,6 +179,7 @@ export const validationApi = {
             sample_size?: number;
         };
         privacy_config: {
+            selected_checks?: string[];
             k_anonymity_k?: number;
             l_diversity_l?: number;
             quasi_identifiers?: string[];
@@ -246,6 +248,64 @@ export const validationApi = {
 
     getResults: async (runId: string) => {
         const response = await api.get(`/validate/${runId}/results`);
+        return response.data;
+    },
+};
+
+// Requirements API
+export const requirementsApi = {
+    listByProject: async (projectId: string) => {
+        const response = await api.get(`/requirements/project/${projectId}`);
+        return response.data;
+    },
+
+    create: async (projectId: string, data: {
+        name: string;
+        principle: string;
+        description?: string;
+        specification?: Record<string, any>;
+        based_on_template_id?: string;
+    }) => {
+        const response = await api.post(`/requirements/project/${projectId}`, data);
+        return response.data;
+    },
+
+    update: async (requirementId: string, data: {
+        name?: string;
+        principle?: string;
+        description?: string;
+        specification?: Record<string, any>;
+        status?: string;
+    }) => {
+        const response = await api.put(`/requirements/${requirementId}`, data);
+        return response.data;
+    },
+
+    delete: async (requirementId: string) => {
+        const response = await api.delete(`/requirements/${requirementId}`);
+        return response.data;
+    },
+
+    elicitFromDataset: async (data: { dataset_id: string; project_id: string }) => {
+        const response = await api.post('/requirements/elicit-from-dataset', data);
+        return response.data;
+    },
+
+    elicitFromModel: async (data: { model_id: string; dataset_id: string; project_id: string }) => {
+        const response = await api.post('/requirements/elicit-from-model', data);
+        return response.data;
+    },
+
+    acceptElicited: async (data: {
+        project_id: string;
+        name: string;
+        principle: string;
+        description?: string;
+        specification?: Record<string, any>;
+        elicitation_reason?: string;
+        confidence_score?: number;
+    }) => {
+        const response = await api.post('/requirements/accept-elicited', data);
         return response.data;
     },
 };

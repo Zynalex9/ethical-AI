@@ -36,9 +36,11 @@ import {
     ModelTraining as ModelIcon,
     Storage as DatasetIcon,
     Assessment as ValidationIcon,
+    Assignment as RequirementIcon,
+    AutoFixHigh as ElicitIcon,
 } from '@mui/icons-material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { projectsApi, modelsApi, datasetsApi, validationApi } from '../services/api';
+import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi } from '../services/api';
 import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
 
 interface TabPanelProps {
@@ -177,10 +179,16 @@ export default function ProjectDetailPage() {
     });
 
     // Fetch validation history
+    const { data: savedRequirements = [] } = useQuery({
+        queryKey: ['requirements', id],
+        queryFn: () => requirementsApi.listByProject(id!),
+        enabled: !!id,
+    });
+
     const { data: validationHistory, isLoading: validationsLoading } = useQuery({
         queryKey: ['validations', id],
         queryFn: () => validationApi.getHistory(id!),
-        enabled: !!id && tab === 2,
+        enabled: !!id && tab === 3,
     });
 
     // Upload model
@@ -311,6 +319,7 @@ export default function ProjectDetailPage() {
             <Tabs value={tab} onChange={(_, v) => setTab(v)}>
                 <Tab icon={<ModelIcon />} iconPosition="start" label={`Models (${models?.length || 0})`} />
                 <Tab icon={<DatasetIcon />} iconPosition="start" label={`Datasets (${datasets?.length || 0})`} />
+                <Tab icon={<RequirementIcon />} iconPosition="start" label={`Requirements (${savedRequirements.length})`} />
                 <Tab icon={<ValidationIcon />} iconPosition="start" label="Validations" />
             </Tabs>
 
@@ -482,8 +491,92 @@ export default function ProjectDetailPage() {
                 )}
             </TabPanel>
 
-            {/* Validations Tab */}
+            {/* Requirements Tab */}
             <TabPanel value={tab} index={2}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+                    <Typography variant="body2" color="text.secondary">
+                        Define ethical requirements and use Cognitive RE to auto-generate them from your data and model.
+                    </Typography>
+                    <Button
+                        variant="contained"
+                        startIcon={<ElicitIcon />}
+                        onClick={() => navigate(`/projects/${id}/requirements/elicit`)}
+                    >
+                        Elicit Requirements
+                    </Button>
+                </Box>
+                {savedRequirements.length === 0 ? (
+                    <Card>
+                        <CardContent sx={{ textAlign: 'center', py: 6 }}>
+                            <RequirementIcon sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
+                            <Typography variant="h6" color="text.secondary">
+                                No requirements defined yet
+                            </Typography>
+                            <Button
+                                variant="outlined"
+                                startIcon={<ElicitIcon />}
+                                sx={{ mt: 2 }}
+                                onClick={() => navigate(`/projects/${id}/requirements/elicit`)}
+                            >
+                                Elicit Requirements
+                            </Button>
+                        </CardContent>
+                    </Card>
+                ) : (
+                    <TableContainer component={Card}>
+                        <Table>
+                            <TableHead>
+                                <TableRow>
+                                    <TableCell>Name</TableCell>
+                                    <TableCell>Principle</TableCell>
+                                    <TableCell>Source</TableCell>
+                                    <TableCell>Rules</TableCell>
+                                    <TableCell align="right">Actions</TableCell>
+                                </TableRow>
+                            </TableHead>
+                            <TableBody>
+                                {savedRequirements.map((req: any) => (
+                                    <TableRow key={req.id} hover>
+                                        <TableCell>
+                                            <Typography variant="body2" fontWeight={500}>{req.name}</Typography>
+                                            {req.description && (
+                                                <Typography variant="caption" color="text.secondary">{req.description}</Typography>
+                                            )}
+                                        </TableCell>
+                                        <TableCell>
+                                            <Chip label={req.principle} size="small" />
+                                        </TableCell>
+                                        <TableCell>
+                                            <Chip
+                                                label={req.elicited_automatically ? 'Auto' : 'Manual'}
+                                                size="small"
+                                                variant="outlined"
+                                                color={req.elicited_automatically ? 'primary' : 'default'}
+                                            />
+                                        </TableCell>
+                                        <TableCell>
+                                            <Typography variant="caption" color="text.secondary">
+                                                {req.specification?.rules?.length ?? 0} rule(s)
+                                            </Typography>
+                                        </TableCell>
+                                        <TableCell align="right">
+                                            <Button
+                                                size="small"
+                                                onClick={() => navigate(`/projects/${id}/requirements/elicit`)}
+                                            >
+                                                Manage
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </TableContainer>
+                )}
+            </TabPanel>
+
+            {/* Validations Tab */}
+            <TabPanel value={tab} index={3}>
                 {validationsLoading ? (
                     <CircularProgress />
                 ) : validationHistory?.length === 0 ? (

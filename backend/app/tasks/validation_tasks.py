@@ -64,6 +64,7 @@ async def _run_fairness_validation_async(
     sensitive_feature: str,
     target_column: str,
     thresholds: Optional[Dict[str, float]] = None,
+    selected_metrics: Optional[list] = None,
     user_id: Optional[str] = None,
     progress_callback=None
 ) -> Dict[str, Any]:
@@ -305,7 +306,10 @@ async def _run_fairness_validation_async(
             sensitive_features=sensitive
         )
         
-        report = validator.validate_all(thresholds=thresholds)
+        report = validator.validate_all(
+            thresholds=thresholds,
+            selected_metrics=selected_metrics,
+        )
         
         # Log metrics to MLflow
         metrics_dict = {
@@ -427,6 +431,7 @@ def run_fairness_validation_task(
     sensitive_feature: str,
     target_column: str,
     thresholds: Optional[Dict[str, float]] = None,
+    selected_metrics: Optional[list] = None,
     user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -460,6 +465,7 @@ def run_fairness_validation_task(
                 sensitive_feature=sensitive_feature,
                 target_column=target_column,
                 thresholds=thresholds,
+                selected_metrics=selected_metrics,
                 user_id=user_id,
                 progress_callback=progress_callback
             )
@@ -762,6 +768,7 @@ async def _run_privacy_validation_async(
     l_diversity_l: int = 2,
     quasi_identifiers: Optional[list] = None,
     sensitive_attribute: Optional[str] = None,
+    selected_checks: Optional[list] = None,
     user_id: Optional[str] = None,
     progress_callback=None
 ) -> Dict[str, Any]:
@@ -819,21 +826,34 @@ async def _run_privacy_validation_async(
         # Initialize privacy validator
         validator = PrivacyValidator(df)
         
-        # Build requirements
-        requirements = {'pii_detection': True}
-        
-        if quasi_identifiers:
+        # Build requirements from selected checks
+        checks = set(c.lower() for c in (selected_checks or ['pii_detection', 'k_anonymity', 'l_diversity']))
+        requirements = {}
+
+        if 'pii_detection' in checks:
+            requirements['pii_detection'] = True
+
+        if 'k_anonymity' in checks:
+            if not quasi_identifiers:
+                raise ValueError("k-anonymity selected but quasi_identifiers were not provided")
             requirements['k_anonymity'] = {
                 'k': k_anonymity_k,
                 'quasi_identifiers': quasi_identifiers
             }
-            
-            if sensitive_attribute:
-                requirements['l_diversity'] = {
-                    'l': l_diversity_l,
-                    'quasi_identifiers': quasi_identifiers,
-                    'sensitive_attribute': sensitive_attribute
-                }
+
+        if 'l_diversity' in checks:
+            if not quasi_identifiers:
+                raise ValueError("l-diversity selected but quasi_identifiers were not provided")
+            if not sensitive_attribute:
+                raise ValueError("l-diversity selected but sensitive_attribute was not provided")
+            requirements['l_diversity'] = {
+                'l': l_diversity_l,
+                'quasi_identifiers': quasi_identifiers,
+                'sensitive_attribute': sensitive_attribute
+            }
+
+        if not requirements:
+            raise ValueError("No supported privacy checks selected")
         
         if progress_callback:
             progress_callback(70, "Running privacy checks")
@@ -963,6 +983,7 @@ def run_privacy_validation_task(
     l_diversity_l: int = 2,
     quasi_identifiers: Optional[list] = None,
     sensitive_attribute: Optional[str] = None,
+    selected_checks: Optional[list] = None,
     user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Run privacy validation in background."""
@@ -981,6 +1002,7 @@ def run_privacy_validation_task(
                 l_diversity_l=l_diversity_l,
                 quasi_identifiers=quasi_identifiers,
                 sensitive_attribute=sensitive_attribute,
+                selected_checks=selected_checks,
                 user_id=user_id,
                 progress_callback=progress_callback
             )
