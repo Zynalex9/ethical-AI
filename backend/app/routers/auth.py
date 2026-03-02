@@ -27,6 +27,9 @@ from app.services.auth_service import (
     get_user_by_id,
     get_user_by_email
 )
+from app.middleware.logging_config import get_logger
+
+logger = get_logger("routers.auth")
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -81,6 +84,7 @@ async def register(
     )
     db.add(audit_log)
     
+    logger.info("User registered: %s (id=%s)", user.email, user.id)
     return user
 
 
@@ -137,6 +141,7 @@ async def login(
     )
     db.add(audit_log)
     
+    logger.info("User logged in: %s", user.email)
     return Token(
         access_token=access_token,
         refresh_token=refresh_token

@@ -1,0 +1,140 @@
+# Production Docker Compose – Ethical AI Requirements Engineering Platform
+# Usage: docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+
+version: "3.8"
+
+services:
+  # ─── Database ───────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: ethical-ai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      POSTGRES_DB: ${DB_NAME:-ethical_ai}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  # ─── Redis ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ethical-ai-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  # ─── Backend API ────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ethical-ai-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-ethical_ai}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      JWT_ALGORITHM: HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      CORS_ORIGINS: '["https://${DOMAIN:-localhost}"]'
+      DEBUG: "false"
+      UPLOAD_DIR: /app/uploads
+      MAX_UPLOAD_SIZE_MB: 100
+      MLFLOW_TRACKING_URI: sqlite:////app/mlflow.db
+    volumes:
+      - uploads_data:/app/uploads
+      - mlflow_data:/app/mlruns
+    expose:
+      - "8000"
+    networks:
+      - backend
+      - frontend
+
+  # ─── Celery Worker ──────────────────────────────────────────
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ethical-ai-celery
+    restart: unless-stopped
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-ethical_ai}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      UPLOAD_DIR: /app/uploads
+      MLFLOW_TRACKING_URI: sqlite:////app/mlflow.db
+    volumes:
+      - uploads_data:/app/uploads
+      - mlflow_data:/app/mlruns
+    networks:
+      - backend
+
+  # ─── Frontend (production build served by nginx) ────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    container_name: ethical-ai-frontend
+    restart: unless-stopped
+    networks:
+      - frontend
+
+  # ─── Nginx reverse proxy ───────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: ethical-ai-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  mlflow_data:
+
+networks:
+  backend:
+  frontend:

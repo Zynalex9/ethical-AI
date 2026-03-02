@@ -19,6 +19,10 @@ from ..models.project import Project
 from ..models.ml_model import MLModel, ModelType
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
 from ..services.model_loader import UniversalModelLoader
+from ..middleware.upload_security import validate_upload_file, safe_filename
+from ..middleware.logging_config import get_logger
+
+logger = get_logger("routers.models")
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -97,13 +101,8 @@ async def upload_model(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing file name")
 
-    # Validate file extension
-    ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_MODEL_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_MODEL_EXTENSIONS))}"
-        )
+    # Validate file using security utility
+    ext = validate_upload_file(file, allowed_extensions=list(ALLOWED_MODEL_EXTENSIONS), label="model")
 
     if not name.strip():
         raise HTTPException(status_code=400, detail="Model name cannot be empty")
@@ -112,9 +111,10 @@ async def upload_model(
     upload_dir = Path(settings.upload_dir) / "models" / str(project_id)
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    # Generate unique filename
+    # Generate unique filename (sanitised)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = "".join(c for c in name if c.isalnum() or c in "._-").strip("._-")
+    sanitised = safe_filename(name)
+    safe_name = "".join(c for c in sanitised if c.isalnum() or c in "._-").strip("._-")
     if not safe_name:
         safe_name = "model"
     filename = f"{safe_name}_{timestamp}{ext}"
@@ -190,6 +190,12 @@ async def upload_model(
     )
     db.add(audit)
     await db.commit()
+    
+    logger.info(
+        "Model uploaded: name=%s project=%s size=%d type=%s",
+        name, project_id, file_size,
+        ml_model.model_type if isinstance(ml_model.model_type, str) else ml_model.model_type.value,
+    )
     
     return ModelResponse(
         id=ml_model.id,

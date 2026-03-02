@@ -5,7 +5,6 @@ Provides REST endpoints for querying the Requirement Traceability Matrix,
 requirement compliance history, root-cause analysis, and dataset impact.
 """
 
-import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,8 +20,9 @@ from ..models.validation import Validation
 from ..models.ml_model import MLModel
 from ..models.dataset import Dataset
 from ..services.traceability_service import TraceabilityService
+from ..middleware.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("routers.traceability")
 router = APIRouter(prefix="/traceability", tags=["traceability"])
 
 _service = TraceabilityService()

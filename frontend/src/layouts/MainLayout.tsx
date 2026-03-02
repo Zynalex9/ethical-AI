@@ -33,6 +33,7 @@ import {
     Logout as LogoutIcon,
     Person as PersonIcon,
     AccountTree as TraceIcon,
+    AdminPanelSettings as AdminIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -44,6 +45,7 @@ const menuItems = [
     { text: 'Validations', icon: AssessmentIcon, path: '/validations' },
     { text: 'Templates', icon: DescriptionIcon, path: '/templates' },
     { text: 'Audit Log', icon: HistoryIcon, path: '/audit' },
+    { text: 'Admin', icon: AdminIcon, path: '/admin', adminOnly: true },
 ];
 
 export default function MainLayout() {
@@ -105,7 +107,9 @@ export default function MainLayout() {
 
             {/* Navigation */}
             <List sx={{ px: 2, flex: 1 }}>
-                {menuItems.map((item) => {
+                {menuItems
+                    .filter((item) => !(item as any).adminOnly || user?.role === 'admin')
+                    .map((item) => {
                     const isActive = location.pathname === item.path;
                     return (
                         <ListItem key={item.text} disablePadding sx={{ mb: 0.5 }}>

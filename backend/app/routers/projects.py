@@ -18,6 +18,9 @@ from ..models.dataset import Dataset
 from ..models.requirement import Requirement
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
 from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse
+from ..middleware.logging_config import get_logger
+
+logger = get_logger("routers.projects")
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -32,9 +35,36 @@ async def list_projects(
     """
     List all projects for the current user.
     Admins can see all projects, regular users see only their own.
+    Uses a single query with correlated subqueries to avoid N+1 performance issue.
     """
-    query = select(Project).where(Project.deleted_at.is_(None))
-    
+    # Build correlated count subqueries
+    model_count_sq = (
+        select(func.count(MLModel.id))
+        .where(MLModel.project_id == Project.id)
+        .correlate(Project)
+        .scalar_subquery()
+        .label("model_count")
+    )
+    dataset_count_sq = (
+        select(func.count(Dataset.id))
+        .where(Dataset.project_id == Project.id)
+        .correlate(Project)
+        .scalar_subquery()
+        .label("dataset_count")
+    )
+    req_count_sq = (
+        select(func.count(Requirement.id))
+        .where(Requirement.project_id == Project.id)
+        .correlate(Project)
+        .scalar_subquery()
+        .label("requirement_count")
+    )
+
+    query = (
+        select(Project, model_count_sq, dataset_count_sq, req_count_sq)
+        .where(Project.deleted_at.is_(None))
+    )
+
     # Non-admin users only see their own projects
     if current_user.role.value != "admin":
         query = query.where(Project.owner_id == current_user.id)
@@ -42,24 +72,10 @@ async def list_projects(
     query = query.offset(skip).limit(limit).order_by(Project.created_at.desc())
     
     result = await db.execute(query)
-    projects = result.scalars().all()
+    rows = result.all()
     
-    # Get counts for each project
     response = []
-    for project in projects:
-        # Count models
-        model_count = await db.scalar(
-            select(func.count(MLModel.id)).where(MLModel.project_id == project.id)
-        )
-        # Count datasets
-        dataset_count = await db.scalar(
-            select(func.count(Dataset.id)).where(Dataset.project_id == project.id)
-        )
-        # Count requirements
-        req_count = await db.scalar(
-            select(func.count(Requirement.id)).where(Requirement.project_id == project.id)
-        )
-        
+    for project, m_count, d_count, r_count in rows:
         response.append(ProjectResponse(
             id=project.id,
             name=project.name,
@@ -67,9 +83,9 @@ async def list_projects(
             owner_id=project.owner_id,
             created_at=project.created_at,
             updated_at=project.updated_at,
-            model_count=model_count or 0,
-            dataset_count=dataset_count or 0,
-            requirement_count=req_count or 0
+            model_count=m_count or 0,
+            dataset_count=d_count or 0,
+            requirement_count=r_count or 0
         ))
     
     return response
@@ -89,10 +105,9 @@ async def create_project(
     )
     
     db.add(project)
-    await db.commit()
-    await db.refresh(project)
+    await db.flush()  # Get the project.id without committing yet
     
-    # Audit log
+    # Audit log (single commit with project)
     audit = AuditLog(
         user_id=current_user.id,
         action=AuditAction.PROJECT_CREATE,
@@ -102,6 +117,7 @@ async def create_project(
     )
     db.add(audit)
     await db.commit()
+    await db.refresh(project)
     
     return ProjectResponse(
         id=project.id,

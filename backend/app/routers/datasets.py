@@ -2,7 +2,6 @@
 
 import os
 import shutil
-import logging
 from typing import List, Optional
 from uuid import UUID
 from pathlib import Path
@@ -20,9 +19,11 @@ from ..models.user import User
 from ..models.project import Project
 from ..models.dataset import Dataset
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
+from ..middleware.upload_security import validate_upload_file, safe_filename
 
-# FIX: Added logger initialization to handle error logging in load_benchmark_dataset
-logger = logging.getLogger(__name__)
+from ..middleware.logging_config import get_logger
+
+logger = get_logger("routers.datasets")
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 ALLOWED_DATASET_EXTENSIONS = {".csv"}
@@ -99,13 +100,8 @@ async def upload_dataset(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing file name")
 
-    # Validate file extension
-    ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_DATASET_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_DATASET_EXTENSIONS))}"
-        )
+    # Validate file using security utility
+    ext = validate_upload_file(file, allowed_extensions=list(ALLOWED_DATASET_EXTENSIONS), label="dataset")
 
     if not name.strip():
         raise HTTPException(status_code=400, detail="Dataset name cannot be empty")
@@ -114,9 +110,10 @@ async def upload_dataset(
     upload_dir = Path(settings.upload_dir) / "datasets" / str(project_id)
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    # Generate unique filename
+    # Generate unique filename (sanitised)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = "".join(c for c in name if c.isalnum() or c in "._-").strip("._-")
+    sanitised = safe_filename(name)
+    safe_name = "".join(c for c in sanitised if c.isalnum() or c in "._-").strip("._-")
     if not safe_name:
         safe_name = "dataset"
     filename = f"{safe_name}_{timestamp}{ext}"
@@ -224,6 +221,11 @@ async def upload_dataset(
     )
     db.add(audit)
     await db.commit()
+    
+    logger.info(
+        "Dataset uploaded: name=%s project=%s rows=%d cols=%d",
+        name, project_id, row_count, column_count,
+    )
     
     return DatasetResponse(
         id=dataset.id,

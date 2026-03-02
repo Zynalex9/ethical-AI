@@ -13,7 +13,21 @@ from fastapi.exceptions import RequestValidationError
 from app.config import settings
 from app.database import init_db, close_db, create_engine_and_session
 from app import database
-from app.routers import auth, projects, models, datasets, validation, templates, audit, requirements, traceability, reports
+from app.routers import auth, projects, models, datasets, validation, templates, audit, requirements, traceability, reports, admin
+from app.middleware.logging_config import setup_logging, get_logger
+from app.middleware.error_handler import (
+    AppError,
+    RequestIdMiddleware,
+    app_error_handler,
+    validation_exception_handler,
+    general_exception_handler,
+)
+from app.middleware.request_logging import RequestLoggingMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+
+# ---------- Initialise structured logging ----------
+setup_logging(json_output=not settings.debug, level="DEBUG" if settings.debug else "INFO")
+logger = get_logger("main")
 
 
 @asynccontextmanager
@@ -23,9 +37,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Handles startup and shutdown events.
     """
     # Startup
-    print(f"Starting {settings.app_name} v{settings.app_version}")
+    logger.info("Starting %s v%s", settings.app_name, settings.app_version)
     await init_db()
-    print("Database initialized")
+    logger.info("Database initialized")
 
     # Auto-seed domain templates (Phase 5 – 6.8)
     try:
@@ -33,15 +47,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         create_engine_and_session()
         async with database.async_session_maker() as db:
             result = await _seed_templates(db)
-            print(f"Template seeding: {result.get('message', 'done')}")
+            logger.info("Template seeding: %s", result.get("message", "done"))
     except Exception as exc:
-        print(f"Template seeding skipped: {exc}")
+        logger.warning("Template seeding skipped: %s", exc)
     
     yield
     
     # Shutdown
     await close_db()
-    print("Database connections closed")
+    logger.info("Database connections closed")
 
 
 # Create FastAPI application
@@ -55,7 +69,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS
+# ---------- Middleware (order matters: outermost first) ----------
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitMiddleware, requests_per_minute=100)
+app.add_middleware(RequestIdMiddleware)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -64,42 +83,10 @@ app.add_middleware(
     allow_headers=settings.cors_allow_headers,
 )
 
-
-# Exception handlers
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    request: Request,
-    exc: RequestValidationError
-) -> JSONResponse:
-    """Handle validation errors with detailed messages."""
-    errors = []
-    for error in exc.errors():
-        errors.append({
-            "field": ".".join(str(loc) for loc in error["loc"]),
-            "message": error["msg"],
-            "type": error["type"]
-        })
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": "Validation error", "errors": errors}
-    )
-
-
-@app.exception_handler(Exception)
-async def general_exception_handler(
-    request: Request,
-    exc: Exception
-) -> JSONResponse:
-    """Handle unexpected errors."""
-    if settings.debug:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": str(exc)}
-        )
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Internal server error"}
-    )
+# ---------- Exception handlers ----------
+app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]
+app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(Exception, general_exception_handler)  # type: ignore[arg-type]
 
 
 # Register routers
@@ -113,6 +100,7 @@ app.include_router(audit.router, prefix=settings.api_prefix)
 app.include_router(requirements.router, prefix=settings.api_prefix)
 app.include_router(traceability.router, prefix=settings.api_prefix)
 app.include_router(reports.router, prefix=settings.api_prefix)
+app.include_router(admin.router, prefix=settings.api_prefix)
 
 
 # Health check endpoint

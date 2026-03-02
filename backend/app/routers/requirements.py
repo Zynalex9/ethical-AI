@@ -13,7 +13,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -28,8 +27,9 @@ from ..models.project import Project
 from ..models.requirement import EthicalPrinciple, Requirement, RequirementStatus
 from ..models.user import User
 from ..services.requirement_elicitor import RequirementElicitor
+from ..middleware.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("routers.requirements")
 router = APIRouter(prefix="/requirements", tags=["requirements"])
 
 ALLOWED_OPERATORS = {">=", "<=", ">", "<", "=="}

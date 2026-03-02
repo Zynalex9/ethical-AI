@@ -16,6 +16,9 @@ from ..models.user import User
 from ..models.template import Template, TemplateDomain
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
 from ..services.template_library import TemplateLibrary
+from ..middleware.logging_config import get_logger
+
+logger = get_logger("routers.templates")
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 

@@ -1,7 +1,6 @@
 # Validation router - Run validations via API
 
 import os
-import logging
 import math
 from typing import List, Optional, Dict, Any
 from uuid import UUID, uuid4
@@ -28,8 +27,9 @@ from ..services.model_loader import UniversalModelLoader
 from ..validators.fairness_validator import FairnessValidator
 from ..validators.explainability_engine import ExplainabilityEngine
 from ..validators.privacy_validator import PrivacyValidator
+from ..middleware.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("routers.validation")
 router = APIRouter(prefix="/validate", tags=["validation"])
 
 
@@ -209,6 +209,11 @@ async def run_fairness_validation(
     await db.commit()
     await db.refresh(validation)
     
+    logger.info(
+        "Fairness validation started: id=%s model=%s dataset=%s",
+        validation.id, model_record.name, dataset_record.name,
+    )
+    
     try:
         # Load model
         model = UniversalModelLoader.load(model_record.file_path)
@@ -268,6 +273,8 @@ async def run_fairness_validation(
         db.add(audit)
         await db.commit()
         
+        logger.info("Fairness validation completed: id=%s passed=%s", validation.id, report.overall_passed)
+        
         # Format response
         metrics = {}
         for m in report.metrics:
@@ -297,6 +304,7 @@ async def run_fairness_validation(
         validation.completed_at = datetime.now(timezone.utc)
         await db.commit()
         
+        logger.error("Fairness validation failed: id=%s error=%s", validation.id, e)
         raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
 
 

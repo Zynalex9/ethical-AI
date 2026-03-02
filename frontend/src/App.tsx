@@ -23,6 +23,7 @@ import AuditLogPage from './pages/AuditLogPage';
 import RequirementElicitationPage from './pages/RequirementElicitationPage';
 import TraceabilityPage from './pages/TraceabilityPage';
 import ReportViewerPage from './pages/ReportViewerPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -156,6 +157,7 @@ function AppRoutes() {
         <Route path="templates" element={<TemplateBrowserPage />} />
         <Route path="templates/manage" element={<TemplatesPage />} />
         <Route path="audit" element={<AuditLogPage />} />
+        <Route path="admin" element={<AdminDashboardPage />} />
         <Route path="profile" element={<PlaceholderPage title="Profile" />} />
         <Route path="settings" element={<PlaceholderPage title="Settings" />} />
       </Route>

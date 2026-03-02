@@ -14,6 +14,9 @@ from app.models.project import Project
 from app.models.user import User
 from app.models.validation_suite import ValidationSuite
 from app.services.report_generator import ReportGenerator
+from app.middleware.logging_config import get_logger
+
+logger = get_logger("routers.reports")
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 

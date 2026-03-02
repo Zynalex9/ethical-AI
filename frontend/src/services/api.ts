@@ -11,7 +11,19 @@ const api: AxiosInstance = axios.create({
 
 export const getApiErrorMessage = (error: unknown, fallback = 'Request failed'): string => {
     if (axios.isAxiosError(error)) {
-        const detail = (error.response?.data as any)?.detail;
+        const data = error.response?.data as any;
+        // New structured format: { error, message, details }
+        if (data?.message && typeof data.message === 'string' && data.message.trim()) {
+            // Append first validation detail if present
+            if (Array.isArray(data.details) && data.details.length > 0) {
+                const first = data.details[0];
+                const detail = first?.message || first?.msg;
+                if (detail) return detail;
+            }
+            return data.message;
+        }
+        // Legacy FastAPI format: { detail: string | [{msg}] }
+        const detail = data?.detail;
         if (typeof detail === 'string' && detail.trim()) return detail;
         if (Array.isArray(detail)) return detail.map((d) => d?.msg || d).join('; ');
         if (error.message) return error.message;

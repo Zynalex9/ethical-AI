@@ -90,12 +90,12 @@ class Settings(BaseSettings):
                 os.path.join(backend_dir, self.upload_dir)
             )
         
-        # Log paths for debugging
-        print(f"🔧 Configuration loaded:")
-        print(f"   Backend directory: {backend_dir}")
-        print(f"   MLflow tracking URI: {self.mlflow_tracking_uri}")
-        print(f"   MLflow artifacts: {self.mlflow_artifact_location}")
-        print(f"   Upload directory: {self.upload_dir}")
+        # Log paths for debugging (use stdlib since our structured logger isn't ready yet)
+        import logging as _log
+        _log.getLogger("ethical_ai.config").info(
+            "Config loaded – backend=%s  mlflow=%s  uploads=%s",
+            backend_dir, self.mlflow_tracking_uri, self.upload_dir,
+        )
 
 
 @lru_cache()

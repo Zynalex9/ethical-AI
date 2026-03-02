@@ -13,6 +13,9 @@ from ..database import get_db
 from ..dependencies import get_current_user
 from ..models.user import User
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
+from ..middleware.logging_config import get_logger
+
+logger = get_logger("routers.audit")
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 

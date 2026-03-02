@@ -1,6 +1,6 @@
 // Register page component
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
     Box,
@@ -15,6 +15,10 @@ import {
     InputAdornment,
     IconButton,
     CircularProgress,
+    List,
+    ListItem,
+    ListItemIcon,
+    ListItemText,
 } from '@mui/material';
 import {
     Email as EmailIcon,
@@ -23,8 +27,20 @@ import {
     Visibility,
     VisibilityOff,
     Security as SecurityIcon,
+    CheckCircle as CheckIcon,
+    RadioButtonUnchecked as UncheckedIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import { getApiErrorMessage } from '../services/api';
+
+// Password complexity rules (must match backend schema)
+const PASSWORD_RULES = [
+    { label: 'At least 8 characters',            test: (p: string) => p.length >= 8 },
+    { label: 'One uppercase letter (A–Z)',        test: (p: string) => /[A-Z]/.test(p) },
+    { label: 'One lowercase letter (a–z)',        test: (p: string) => /[a-z]/.test(p) },
+    { label: 'One digit (0–9)',                   test: (p: string) => /\d/.test(p) },
+    { label: 'One special character (!@#$…)',     test: (p: string) => /[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;'/`~]/.test(p) },
+];
 
 export default function RegisterPage() {
     const navigate = useNavigate();
@@ -35,8 +51,12 @@ export default function RegisterPage() {
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
+    const [showChecklist, setShowChecklist] = useState(false);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+
+    const ruleResults = useMemo(() => PASSWORD_RULES.map((r) => r.test(password)), [password]);
+    const allRulesPassed = ruleResults.every(Boolean);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -47,8 +67,9 @@ export default function RegisterPage() {
             return;
         }
 
-        if (password.length < 8) {
-            setError('Password must be at least 8 characters');
+        if (!allRulesPassed) {
+            const failing = PASSWORD_RULES.filter((r) => !r.test(password));
+            setError(`Password requirements not met: ${failing.map((r) => r.label).join(', ')}`);
             return;
         }
 
@@ -58,8 +79,7 @@ export default function RegisterPage() {
             await register(email, password, name);
             navigate('/dashboard');
         } catch (err: unknown) {
-            const errorMessage = err instanceof Error ? err.message : 'Registration failed. Please try again.';
-            setError(errorMessage);
+            setError(getApiErrorMessage(err, 'Registration failed. Please try again.'));
         } finally {
             setIsLoading(false);
         }
@@ -179,9 +199,15 @@ export default function RegisterPage() {
                                 type={showPassword ? 'text' : 'password'}
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
+                                onFocus={() => setShowChecklist(true)}
                                 required
-                                sx={{ mb: 2 }}
-                                helperText="Minimum 8 characters"
+                                sx={{ mb: showChecklist ? 1 : 2 }}
+                                error={showChecklist && password.length > 0 && !allRulesPassed}
+                                helperText={
+                                    showChecklist && password.length > 0 && !allRulesPassed
+                                        ? 'Password does not meet all requirements'
+                                        : undefined
+                                }
                                 InputProps={{
                                     startAdornment: (
                                         <InputAdornment position="start">
@@ -200,6 +226,29 @@ export default function RegisterPage() {
                                     ),
                                 }}
                             />
+
+                            {/* Live password requirements checklist */}
+                            {showChecklist && (
+                                <List dense disablePadding sx={{ mb: 2, pl: 1 }}>
+                                    {PASSWORD_RULES.map((rule, i) => (
+                                        <ListItem key={rule.label} disablePadding sx={{ py: 0.2 }}>
+                                            <ListItemIcon sx={{ minWidth: 28 }}>
+                                                {ruleResults[i]
+                                                    ? <CheckIcon sx={{ fontSize: 16, color: 'success.main' }} />
+                                                    : <UncheckedIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+                                                }
+                                            </ListItemIcon>
+                                            <ListItemText
+                                                primary={rule.label}
+                                                primaryTypographyProps={{
+                                                    variant: 'caption',
+                                                    color: ruleResults[i] ? 'success.main' : 'text.secondary',
+                                                }}
+                                            />
+                                        </ListItem>
+                                    ))}
+                                </List>
+                            )}
 
                             <TextField
                                 fullWidth
