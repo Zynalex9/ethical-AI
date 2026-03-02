@@ -39,11 +39,14 @@ import {
     Assignment as RequirementIcon,
     AutoFixHigh as ElicitIcon,
     AccountTree as TraceIcon,
+    ContentCopy as DuplicateIcon,
+    Edit as EditIcon,
 } from '@mui/icons-material';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi, getApiErrorMessage } from '../services/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi, templatesApi, getApiErrorMessage } from '../services/api';
 import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
 import TraceabilityMatrix from '../components/TraceabilityMatrix';
+import type { Template } from '../types';
 
 interface TabPanelProps {
     children?: React.ReactNode;
@@ -194,6 +197,29 @@ export default function ProjectDetailPage() {
         queryKey: ['requirements', id],
         queryFn: () => requirementsApi.listByProject(id!),
         enabled: !!id,
+    });
+
+    // Fetch templates for requirement source lookup (Phase 5)
+    const { data: allTemplates = [] } = useQuery<Template[]>({
+        queryKey: ['templates'],
+        queryFn: () => templatesApi.list(),
+        enabled: !!id,
+    });
+    const templateMap = new Map(allTemplates.map((t) => [t.id, t]));
+
+    // Duplicate requirement mutation (Phase 5 – 6.7)
+    const duplicateRequirementMutation = useMutation({
+        mutationFn: (req: any) =>
+            requirementsApi.create(id!, {
+                name: `${req.name} (Copy)`,
+                principle: req.principle,
+                description: req.description,
+                specification: req.specification,
+                based_on_template_id: req.based_on_template_id,
+            }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['requirements', id] });
+        },
     });
 
     const { data: validationHistory, isLoading: validationsLoading } = useQuery({
@@ -541,7 +567,7 @@ export default function ProjectDetailPage() {
                 )}
             </TabPanel>
 
-            {/* Requirements Tab */}
+            {/* Requirements Tab (Phase 5 – 6.7 improved) */}
             <TabPanel value={tab} index={2}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
                     <Typography variant="body2" color="text.secondary">
@@ -585,40 +611,73 @@ export default function ProjectDetailPage() {
                                 </TableRow>
                             </TableHead>
                             <TableBody>
-                                {savedRequirements.map((req: any) => (
-                                    <TableRow key={req.id} hover>
-                                        <TableCell>
-                                            <Typography variant="body2" fontWeight={500}>{req.name}</Typography>
-                                            {req.description && (
-                                                <Typography variant="caption" color="text.secondary">{req.description}</Typography>
-                                            )}
-                                        </TableCell>
-                                        <TableCell>
-                                            <Chip label={req.principle} size="small" />
-                                        </TableCell>
-                                        <TableCell>
-                                            <Chip
-                                                label={req.elicited_automatically ? 'Auto' : 'Manual'}
-                                                size="small"
-                                                variant="outlined"
-                                                color={req.elicited_automatically ? 'primary' : 'default'}
-                                            />
-                                        </TableCell>
-                                        <TableCell>
-                                            <Typography variant="caption" color="text.secondary">
-                                                {req.specification?.rules?.length ?? 0} rule(s)
-                                            </Typography>
-                                        </TableCell>
-                                        <TableCell align="right">
-                                            <Button
-                                                size="small"
-                                                onClick={() => navigate(`/projects/${id}/requirements/elicit`)}
-                                            >
-                                                Manage
-                                            </Button>
-                                        </TableCell>
-                                    </TableRow>
-                                ))}
+                                {savedRequirements.map((req: any) => {
+                                    const srcTemplate = req.based_on_template_id
+                                        ? templateMap.get(req.based_on_template_id)
+                                        : null;
+                                    const sourceLabel = srcTemplate
+                                        ? `Template (${srcTemplate.template_id})`
+                                        : req.elicited_automatically
+                                        ? 'Auto-generated'
+                                        : 'Manual';
+                                    const sourceColor: 'primary' | 'secondary' | 'default' = srcTemplate
+                                        ? 'secondary'
+                                        : req.elicited_automatically
+                                        ? 'primary'
+                                        : 'default';
+                                    return (
+                                        <TableRow key={req.id} hover>
+                                            <TableCell>
+                                                <Typography variant="body2" fontWeight={500}>{req.name}</Typography>
+                                                {req.description && (
+                                                    <Typography variant="caption" color="text.secondary">{req.description}</Typography>
+                                                )}
+                                                {srcTemplate && (
+                                                    <Chip
+                                                        label={`From ${srcTemplate.name}`}
+                                                        size="small"
+                                                        variant="outlined"
+                                                        color="secondary"
+                                                        sx={{ mt: 0.5, display: 'block', width: 'fit-content' }}
+                                                    />
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Chip label={req.principle} size="small" />
+                                            </TableCell>
+                                            <TableCell>
+                                                <Chip
+                                                    label={sourceLabel}
+                                                    size="small"
+                                                    variant="outlined"
+                                                    color={sourceColor}
+                                                />
+                                            </TableCell>
+                                            <TableCell>
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {req.specification?.rules?.length ?? 0} rule(s)
+                                                </Typography>
+                                            </TableCell>
+                                            <TableCell align="right">
+                                                <Button
+                                                    size="small"
+                                                    startIcon={<EditIcon />}
+                                                    onClick={() => navigate(`/projects/${id}/requirements/elicit`)}
+                                                >
+                                                    Edit
+                                                </Button>
+                                                <Button
+                                                    size="small"
+                                                    startIcon={<DuplicateIcon />}
+                                                    onClick={() => duplicateRequirementMutation.mutate(req)}
+                                                    disabled={duplicateRequirementMutation.isPending}
+                                                >
+                                                    Duplicate
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
                             </TableBody>
                         </Table>
                     </TableContainer>

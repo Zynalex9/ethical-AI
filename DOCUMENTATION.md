@@ -1,614 +1,597 @@
-# Ethical AI Requirements Engineering Platform
+# Ethical AI Platform — Complete Developer & AI-Agent Documentation
 
-## Complete Technical Documentation
+## 1) What This Platform Does
 
----
+The platform operationalizes ethical AI checks across four principles:
 
-## Table of Contents
+1. **Fairness**
+   - Group fairness metrics (demographic parity, equalized odds, disparate impact, etc.).
+2. **Transparency**
+   - Explainability artifacts (feature importance, model-card style outputs).
+3. **Privacy**
+   - PII checks + anonymization checks (k-anonymity, l-diversity).
+4. **Accountability**
+   - Experiment/audit trace logging (MLflow + internal audit logs).
 
-1. [Project Overview](#project-overview)
-2. [Architecture](#architecture)
-3. [Backend Structure](#backend-structure)
-4. [The Four Ethical Principles](#the-four-ethical-principles)
-5. [Model Loading - What Can Be Uploaded](#model-loading)
-6. [Fairness Validation - What Can Be Tested](#fairness-validation)
-7. [Transparency Validation - Explainability](#transparency-validation)
-8. [Privacy Validation](#privacy-validation)
-9. [Accountability Tracking](#accountability-tracking)
-10. [Frontend Structure](#frontend-structure)
-11. [Current Capabilities vs Limitations](#capabilities-vs-limitations)
-12. [API Endpoints](#api-endpoints)
-13. [How to Run](#how-to-run)
+It supports both:
+- **manual validation configuration**, and
+- **template-driven validation presets**.
 
 ---
 
-## 1. Project Overview
+## 2) High-Level Architecture
 
-The **Ethical AI Requirements Engineering Platform** is a web-based system that helps organizations validate their AI/ML models against four core ethical principles:
+## 2.1 Runtime Components
 
-| Principle | What It Checks |
-|-----------|----------------|
-| **Fairness** | Does the model treat all demographic groups equally? |
-| **Transparency** | Can we explain why the model makes its predictions? |
-| **Privacy** | Does the data contain PII? Is it properly anonymized? |
-| **Accountability** | Can we trace and audit all validation activities? |
+- **Frontend**: React + TypeScript + Vite + MUI + React Query
+- **Backend API**: FastAPI (async SQLAlchemy)
+- **Database**: PostgreSQL
+- **Async worker**: Celery worker
+- **Broker/result backend**: Redis
+- **Experiment tracking/artifacts**: MLflow (SQLite-backed by default, artifacts on disk)
 
-### The Problem It Solves
+## 2.2 Request/Execution Topology
 
-AI systems often exhibit bias or make unexplainable decisions. Regulations like GDPR, EU AI Act, and industry standards require organizations to:
-- Prove their AI systems don't discriminate
-- Explain automated decisions
-- Protect personal data
-- Maintain audit trails
-
-This platform automates these validations.
+1. Frontend calls backend `/api/v1/*` endpoints.
+2. Simple operations run inline (CRUD, metadata reads).
+3. Long-running validations are queued with Celery (`/validate/all`).
+4. Frontend polls task status (`/validate/task/{task_id}`).
+5. Final suite results are fetched (`/validate/suite/{suite_id}/results`).
 
 ---
 
-## 2. Architecture
+## 3) Monorepo Structure
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         FRONTEND                                │
-│  React 18 + TypeScript + MUI + React Router + React Query       │
-│  ┌─────────┐ ┌─────────┐ ┌───────────┐ ┌─────────────────────┐  │
-│  │  Login  │ │Dashboard│ │ Projects  │ │ Validation Results  │  │
-│  └─────────┘ └─────────┘ └───────────┘ └─────────────────────┘  │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │ HTTP/REST API
-┌──────────────────────────────▼──────────────────────────────────┐
-│                         BACKEND (FastAPI)                       │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                      API Routers                             │ 
-│  │  /auth  │  /projects  │  /models  │  /datasets  │ /validate  │
-│  └─────────────────────────────────────────────────────────────┘│
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                    Validation Engines                        │ 
-│  │  ┌────────────┐ ┌──────────────┐ ┌─────────┐ ┌────────────┐  │
-│  │  │  Fairness  │ │Transparency  │ │ Privacy │ │Accountability││
-│  │  │ (Fairlearn)│ │ (SHAP/LIME)  │ │(k-anon) │ │  (MLflow)   │ │ 
-│  │  └────────────┘ └──────────────┘ └─────────┘ └────────────┘  │
-│  └─────────────────────────────────────────────────────────────┘│
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                    Model Loader                              │ 
-│  │  sklearn (.pkl) │ TensorFlow (.h5) │ PyTorch (.pt) │ ONNX    │
-│  └─────────────────────────────────────────────────────────────┘│
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────────┐
-│                        DATA LAYER                               │
-│   PostgreSQL (async)  │  Redis (caching)  │  MLflow (tracking)  │
-└─────────────────────────────────────────────────────────────────┘
+```text
+BS/
+├── backend/
+│   ├── app/
+│   │   ├── main.py                  # FastAPI app bootstrap + startup seeding
+│   │   ├── config.py                # Pydantic settings, env loading, path normalization
+│   │   ├── database.py              # Async engine/session lifecycle
+│   │   ├── celery_app.py            # Celery app + queue config
+│   │   ├── models/                  # ORM models
+│   │   ├── routers/                 # API route handlers
+│   │   ├── services/                # Domain/business logic
+│   │   ├── tasks/validation_tasks.py# Celery validation orchestration + validators
+│   │   └── validators/              # Fairness, transparency, privacy, accountability engines
+│   ├── alembic/versions/            # DB migrations
+│   ├── requirements.txt
+│   └── .env.example
+├── frontend/
+│   ├── src/
+│   │   ├── App.tsx                  # Route map
+│   │   ├── services/api.ts          # Axios API client + endpoint wrappers
+│   │   ├── contexts/AuthContext.tsx # Auth state/session bootstrap
+│   │   ├── layouts/MainLayout.tsx   # App shell + sidebar
+│   │   └── pages/                   # Feature pages
+├── docker-compose.yml               # PostgreSQL service
+└── DOCUMENTATION.md                 # This file
 ```
 
 ---
 
-## 3. Backend Structure
+## 4) Backend: Core Logic & Responsibilities
 
-```
-backend/
-├── app/
-│   ├── main.py                 # FastAPI entry point
-│   ├── config.py               # Environment configuration
-│   ├── database.py             # SQLAlchemy async setup
-│   ├── dependencies.py         # JWT auth dependency
-│   │
-│   ├── models/                 # SQLAlchemy ORM models
-│   │   ├── user.py             # User with roles (user/admin/auditor)
-│   │   ├── project.py          # Project container
-│   │   ├── ml_model.py         # Uploaded ML model metadata
-│   │   ├── dataset.py          # Uploaded dataset metadata
-│   │   ├── template.py         # Pre-defined validation templates
-│   │   ├── requirement.py      # Custom ethical requirements
-│   │   ├── validation.py       # Validation run + results
-│   │   └── audit_log.py        # Complete audit trail
-│   │
-│   ├── schemas/                # Pydantic request/response schemas
-│   │   ├── user.py             # UserCreate, UserLogin, Token
-│   │   └── project.py          # ProjectCreate, ProjectResponse
-│   │
-│   ├── routers/                # API endpoints
-│   │   └── auth.py             # /register, /login, /refresh, /me
-│   │
-│   ├── services/               # Business logic
-│   │   ├── auth_service.py     # JWT + password hashing
-│   │   └── model_loader.py     # Universal model loading
-│   │
-│   ├── validators/             # Validation engines
-│   │   ├── fairness_validator.py      # Fairlearn integration
-│   │   ├── explainability_engine.py   # SHAP + LIME
-│   │   ├── privacy_validator.py       # PII + k-anonymity
-│   │   └── accountability_tracker.py  # MLflow + audit
-│   │
-│   └── examples/               # Demo scripts
-│       ├── fairness_example.py
-│       ├── transparency_example.py
-│       └── privacy_accountability_example.py
-│
-├── requirements.txt
-└── .env
-```
+## 4.1 App Startup (`backend/app/main.py`)
 
----
+Startup lifecycle does:
+1. initialize DB tables/session engine,
+2. auto-seed domain templates via internal `_seed_templates` helper,
+3. register all routers under `settings.api_prefix` (`/api/v1` by default).
 
-## 4. The Four Ethical Principles
+Important behavior:
+- Template seeding runs at startup and is wrapped in try/except.
+- If seeding fails, app still boots but templates may be empty.
 
-### How They Work Together
+## 4.2 Configuration (`backend/app/config.py`)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     VALIDATION WORKFLOW                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   1. Upload Model (.pkl, .h5, .pt, .onnx)                   │
-│                     ↓                                       │
-│   2. Upload Test Dataset (.csv with sensitive attributes)   │
-│                     ↓                                       │
-│   3. Select Ethical Requirements                            │
-│      • Use Template (e.g., ETH1-Finance)                    │
-│      • Or define custom thresholds                          │
-│                     ↓                                       │
-│   4. Run Validation Pipeline                                │
-│      ┌──────────────────────────────────────────────────┐   │
-│      │  PRIVACY → FAIRNESS → TRANSPARENCY → ACCOUNTABILITY  │
-│      └──────────────────────────────────────────────────┘   │
-│                     ↓                                       │
-│   5. Generate Report with Pass/Fail for each principle      │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+Settings are loaded from env vars (and `.env` if present), including:
+- DB URL,
+- Redis/Celery URLs,
+- JWT config,
+- CORS,
+- upload paths,
+- MLflow URI + artifact location.
+
+It normalizes relative paths to absolute paths based on backend directory.
+
+## 4.3 Data Model Snapshot
+
+### Users (`models/user.py`)
+- Role-based users: `user`, `admin`, `auditor`.
+- Own projects and generate audit logs.
+
+### Projects (`models/project.py`)
+- Root entity for model/dataset/requirements.
+- Soft-delete with `deleted_at`.
+
+### ML Models (`models/ml_model.py`)
+- Metadata + file path + framework type.
+- Linked to project.
+
+### Datasets (`models/dataset.py`)
+- Metadata + schema (`columns`) + sensitive attributes + target column + profile data.
+- Linked to project.
+
+### Templates (`models/template.py`)
+- Domain templates with `template_id`, `domain`, `rules`, `version`, `is_active`.
+- Used to generate project requirements and validation presets.
+
+### Requirements (`models/requirement.py`)
+- Ethical requirements per project with principle + JSON rule specification.
+- Optional `based_on_template_id` for traceability to template source.
+- Includes elicitation fields: `elicited_automatically`, reason, confidence.
+
+### Validations (`models/validation.py`)
+- Individual validation runs and metric results.
+- Tracks status/progress/celery task/MLflow run id.
+- Phase-3 traceability fields include behavior patterns and affected groups.
+
+### Validation Suites (`models/validation_suite.py`)
+- Orchestrates multi-principle validation bundle execution.
+- Links fairness/transparency/privacy validation IDs and overall status.
+
+### Audit Logs (`models/audit_log.py`)
+- Immutable activity events by action/resource type.
 
 ---
 
-## 5. Model Loading - What Can Be Uploaded
+## 5) Backend Routers (API Surface)
 
-### File: `backend/app/services/model_loader.py`
+All routers are mounted at `/api/v1`.
 
-The `UniversalModelLoader` supports **4 ML frameworks**:
+## 5.1 Auth (`/auth`)
+- `POST /register`
+- `POST /login`
+- `POST /refresh`
+- `GET /me`
 
-| Framework | Extensions | How It's Loaded |
-|-----------|------------|-----------------|
-| **scikit-learn** | `.pkl`, `.joblib`, `.pickle` | `joblib.load()` or `pickle.load()` |
-| **TensorFlow/Keras** | `.h5`, `.keras`, SavedModel dirs | `tf.keras.models.load_model()` |
-| **PyTorch** | `.pt`, `.pth` | `torch.load()` |
-| **ONNX** | `.onnx` | `onnxruntime.InferenceSession()` |
+## 5.2 Projects (`/projects`)
+- `GET /`
+- `POST /`
+- `GET /{project_id}`
+- `PUT /{project_id}`
+- `DELETE /{project_id}`
 
-### Unified Interface
+## 5.3 Models (`/models`)
+- `POST /upload`
+- `GET /project/{project_id}`
+- `GET /{model_id}`
+- `DELETE /{model_id}`
 
-All models are wrapped to provide:
-```python
-model.predict(X)        # Returns class predictions (0, 1, 2, ...)
-model.predict_proba(X)  # Returns probabilities [[0.3, 0.7], ...]
-```
+## 5.4 Datasets (`/datasets`)
+- `POST /upload`
+- `GET /project/{project_id}`
+- `GET /{dataset_id}`
+- `GET /{dataset_id}/profile`
+- `DELETE /{dataset_id}`
+- `POST /project/{project_id}/load-benchmark`
+- `GET /benchmark/available`
 
-### Usage Example
-```python
-from app.services.model_loader import UniversalModelLoader
+## 5.5 Requirements (`/requirements`)
+- `POST /elicit-from-dataset`
+- `POST /elicit-from-model`
+- `POST /accept-elicited`
+- `GET /project/{project_id}`
+- `POST /project/{project_id}`
+- `PUT /{requirement_id}`
+- `DELETE /{requirement_id}`
 
-# Load any supported model type
-model = UniversalModelLoader.load("path/to/model.pkl")
+## 5.6 Templates (`/templates`)
+- `GET /` (supports domain/principle/search filters)
+- `GET /{tpl_id}`
+- `POST /` (create template)
+- `DELETE /{tpl_id}`
+- `POST /apply-to-project`
+- `POST /{tpl_id}/customize`
+- `POST /seed-defaults` (admin-only)
 
-# Works the same regardless of framework
-predictions = model.predict(X_test)
-probabilities = model.predict_proba(X_test)
+## 5.7 Validation (`/validate`)
+- `POST /fairness`
+- `POST /transparency`
+- `POST /privacy`
+- `GET /{validation_id}`
+- `GET /history/{project_id}`
+- `POST /all` (queue full suite)
+- `GET /task/{task_id}`
+- `GET /suite/{suite_id}/results`
+- `GET /suite/{suite_id}/privacy-details`
+- `GET /suite/{suite_id}/transparency-details`
 
-# Get metadata
-metadata = UniversalModelLoader.get_model_metadata(model)
-# {'model_type': 'sklearn', 'model_class': 'LogisticRegression', ...}
-```
+## 5.8 Traceability (`/traceability`)
+- `GET /project/{project_id}/matrix`
+- `GET /requirement/{requirement_id}/history`
+- `GET /validation/{validation_id}/root-cause`
+- `GET /dataset/{dataset_id}/impact`
 
-### ⚠️ Limitations
-- PyTorch models must be **full models**, not state_dicts
-- TensorFlow/PyTorch require those libraries installed (optional)
-- Custom model classes need the original class definition available
+## 5.9 Reports (`/reports`)
+- `GET /validation/{validation_suite_id}`
+- `GET /validation/{validation_suite_id}/pdf`
+- `GET /project/{project_id}/compliance`
+- `GET /project/{project_id}/compliance/pdf`
+- `POST /custom`
 
----
-
-## 6. Fairness Validation - What Can Be Tested
-
-### File: `backend/app/validators/fairness_validator.py`
-
-Uses the **Fairlearn** library to calculate group fairness metrics.
-
-### Supported Metrics
-
-| Metric | What It Measures | Passes If |
-|--------|------------------|-----------|
-| **Demographic Parity Ratio** | Equal selection rate across groups | ratio ≥ 0.8 |
-| **Demographic Parity Difference** | Max difference in selection rates | diff ≤ 0.1 |
-| **Equalized Odds Ratio** | Equal TPR and FPR across groups | ratio ≥ 0.8 |
-| **Equalized Odds Difference** | Max TPR/FPR difference | diff ≤ 0.1 |
-| **Equal Opportunity Difference** | Equal TPR only (relaxed equalized odds) | diff ≤ 0.1 |
-| **Disparate Impact Ratio** | The "80% rule" from US employment law | ratio ≥ 0.8 |
-
-### Group Metrics
-For each demographic group, calculates:
-- **Confusion Matrix** (TP, FP, TN, FN)
-- **Accuracy**, **TPR**, **FPR**, **TNR**, **FNR**, **Precision**
-
-### Usage Example
-```python
-from app.validators.fairness_validator import FairnessValidator
-
-validator = FairnessValidator(
-    y_true=y_test,           # Ground truth labels
-    y_pred=model.predict(X_test),  # Model predictions
-    sensitive_features=gender_column  # Protected attribute
-)
-
-# Run all fairness checks
-report = validator.validate_all(thresholds={
-    'demographic_parity_ratio': 0.8,
-    'equalized_odds_ratio': 0.8
-})
-
-print(f"Overall Passed: {report.overall_passed}")
-for metric in report.metrics:
-    print(f"{metric.metric_name}: {metric.overall_value:.3f} - {'PASS' if metric.passed else 'FAIL'}")
-```
-
-### Visualizations Generated
-1. **Selection Rate Bar Chart** - Shows positive prediction rate per group
-2. **TPR/FPR Comparison** - Grouped bar chart comparing rates
-3. **Confusion Matrix Heatmaps** - One per demographic group
-
-### ⚠️ Limitations
-- Currently binary classification only
-- Single sensitive attribute at a time (no intersectionality)
-- Requires labeled test data
+## 5.10 Audit (`/audit`)
+- `GET /`
+- `GET /summary`
 
 ---
 
-## 7. Transparency Validation - Explainability
+## 6) Template System: How It Actually Works
 
-### File: `backend/app/validators/explainability_engine.py`
+## 6.1 Seed Catalog
 
-Uses **SHAP** and **LIME** libraries for model interpretability.
+`backend/app/routers/templates.py` defines built-in domain templates:
+- `GEN-FAIRNESS`, `GEN-TRANSPARENCY`, `GEN-PRIVACY`
+- `ETH1`..`ETH6` (finance, healthcare, criminal justice, employment, GDPR, education)
 
-### Explanation Types
+Each template includes:
+- `principles` list,
+- legal reference,
+- `items[]` with metric/operator/value/principle/description.
 
-| Type | Method | What It Shows |
-|------|--------|---------------|
-| **Global SHAP** | KernelExplainer | Feature importance across entire dataset |
-| **Local SHAP** | Per-instance | Why this specific prediction was made |
-| **LIME** | LimeTabularExplainer | Alternative local explanation |
-| **Model Card** | Structured docs | Model documentation per Mitchell et al. |
+## 6.2 Seeding Strategy
 
-### SHAP Explanations
-```python
-from app.validators.explainability_engine import ExplainabilityEngine
+- Startup auto-seeding is triggered in app lifespan.
+- `_seed_templates` is upsert-style:
+  - creates missing template rows,
+  - updates existing rows and increments version when content changes.
 
-engine = ExplainabilityEngine(
-    model=model,
-    X_train=X_train,  # Background data for SHAP
-    feature_names=['age', 'income', 'credit_score', ...]
-)
+## 6.3 Template Application
 
-# Global feature importance
-global_exp = engine.explain_global_shap(X_test)
-for fi in global_exp.top_features(5):
-    print(f"{fi.rank}. {fi.feature_name}: {fi.importance:.4f}")
-
-# Local explanation for one instance
-local_exp = engine.explain_local_shap(X_test, [0])
-print(f"Prediction: {local_exp[0].prediction}")
-for feature, contribution in local_exp[0].feature_contributions.items():
-    print(f"  {feature}: {contribution:+.3f}")
-```
-
-### Model Card Contents
-- Model details (name, type, features)
-- Intended use
-- Training/evaluation data stats
-- Performance metrics (accuracy, precision, recall, F1)
-- Ethical considerations status
-
-### Visualizations Generated
-1. **SHAP Summary Plot** (beeswarm)
-2. **Feature Importance Bar Chart**
-3. **Waterfall Plot** (single instance)
-
-### ⚠️ Limitations
-- SHAP KernelExplainer is slow for large datasets (sample first)
-- LIME works best with tabular data
-- Deep learning models may need specialized explainers
+`POST /templates/apply-to-project`:
+- loads template,
+- optionally applies custom rule overrides/add/remove,
+- creates requirement rows under target project,
+- links requirements via `based_on_template_id`.
 
 ---
 
-## 8. Privacy Validation
+## 7) Validation System: End-to-End Logic
 
-### File: `backend/app/validators/privacy_validator.py`
+## 7.1 Execution Modes
 
-Checks datasets for privacy risks **before** model training or deployment.
+1. **Single validation endpoints** (`/fairness`, `/transparency`, `/privacy`) for direct checks.
+2. **Suite endpoint** (`/validate/all`) for orchestrated async execution with progress polling.
 
-### PII Detection
+## 7.2 Why Celery Is Required
 
-Detects personally identifiable information via:
+Suite validations can be long-running (model load + inference + metrics + artifacts). Celery prevents HTTP request timeout and enables progress tracking.
 
-| Method | Examples Detected |
-|--------|-------------------|
-| **Pattern Matching (Regex)** | emails, phone numbers, SSNs, credit cards, IPs |
-| **Column Name Heuristics** | columns named 'email', 'ssn', 'phone', 'address' |
-| **Value Analysis** | High-cardinality strings (likely identifiers) |
+## 7.3 Suite Lifecycle
 
-### k-Anonymity Checking
+1. Frontend sends `/validate/all` payload.
+2. Backend creates `ValidationSuite` and enqueues Celery task.
+3. Worker performs validations sequentially, updating status/progress.
+4. Frontend polls `/validate/task/{task_id}`.
+5. On success/failure, frontend fetches `/validate/suite/{suite_id}/results`.
 
-> **k-Anonymity**: Every combination of quasi-identifiers appears at least k times.
+## 7.4 Validation Inputs
 
-```python
-from app.validators.privacy_validator import PrivacyValidator
-import pandas as pd
+`runAll` payload includes:
+- `model_id`, `dataset_id`
+- `selected_validations` (subset support)
+- `fairness_config` (sensitive feature, target, selected metrics, thresholds)
+- `transparency_config` (target, sample size)
+- `privacy_config` (checks, k/l values, quasi-identifiers, sensitive attribute)
+- `requirement_ids` (optional link for requirement-driven validation)
 
-validator = PrivacyValidator(df)
+## 7.5 Requirement-Aware Threshold Flow
 
-# Check if dataset is 5-anonymous
-result = validator.check_k_anonymity(
-    quasi_identifiers=['age', 'zip_code', 'gender'],
-    k=5
-)
+In validation page:
+- user can select relevant requirements,
+- thresholds can be imported from requirement `specification.rules`,
+- run payload still carries explicit effective thresholds/checks.
 
-print(f"Satisfies 5-anonymity: {result.satisfies_k}")
-print(f"Actual minimum group size: {result.actual_min_k}")
-```
+## 7.6 Template Preset in Validation UI (Current Behavior)
 
-### l-Diversity Checking
+Validation flow now supports template preset selection:
+- selecting a template auto-derives:
+  - which validations run,
+  - fairness metric selection + thresholds,
+  - privacy checks + k/l defaults.
+- user still selects model/dataset and required dataset columns.
 
-> **l-Diversity**: Each equivalence class has at least l distinct values of sensitive attribute.
-
-Prevents homogeneity attacks where knowing quasi-identifiers reveals sensitive info.
-
-### Full Validation
-```python
-report = validator.validate({
-    'pii_detection': True,
-    'k_anonymity': {'k': 5, 'quasi_identifiers': ['age', 'zip']},
-    'l_diversity': {'l': 2, 'sensitive_attribute': 'income', 'quasi_identifiers': ['age', 'zip']}
-})
-
-print(f"Overall Passed: {report.overall_passed}")
-for rec in report.recommendations:
-    print(f"  ⚠️ {rec}")
-```
-
-### ⚠️ Limitations
-- PII regex patterns are US-focused (phone, SSN formats)
-- No differential privacy training (just validation)
-- Generalization suggestions are manual, not automated
+This is implemented in frontend validation page logic (`applyTemplatePreset` + preset lock behavior).
 
 ---
 
-## 9. Accountability Tracking
+## 8) Requirement Elicitation Logic (Cognitive RE)
 
-### File: `backend/app/validators/accountability_tracker.py`
+Service: `backend/app/services/requirement_elicitor.py`
 
-Provides audit trail and experiment tracking using **MLflow**.
+### Dataset-driven elicitation
+- Detect PII-like columns from names.
+- Detect sensitive-attribute imbalance.
+- Detect high-dimensionality for explainability recommendation.
+- Always include accountability recommendation.
 
-### Features
+### Model+dataset elicitation
+- Uses model predictions to infer fairness risk signals.
+- Adds fairness/transparency/accountability suggestions where patterns indicate risk.
 
-| Feature | Description |
-|---------|-------------|
-| **MLflow Integration** | Track validation experiments with parameters and metrics |
-| **Validation History** | Query past validations by model, requirement, or principle |
-| **Model Versioning** | Register and track model versions |
-| **Audit Reports** | Generate compliance reports with statistics |
-| **Export** | Export complete audit trail as JSON |
-
-### Usage Example
-```python
-from app.validators.accountability_tracker import AccountabilityTracker
-
-tracker = AccountabilityTracker(
-    tracking_uri="sqlite:///mlflow.db",
-    experiment_name="ethical-ai-validations"
-)
-
-# Start tracking a validation run
-run_id = tracker.start_validation_run(
-    model_name="loan_model_v3",
-    model_id="uuid-123",
-    dataset_name="q4_test_data",
-    dataset_id="uuid-456",
-    requirement_name="ETH1-Fairness",
-    requirement_id="req-001",
-    principle="fairness",
-    user_id="auditor_1"
-)
-
-# Log metrics
-tracker.log_metrics({
-    "demographic_parity_ratio": 0.85,
-    "equalized_odds_ratio": 0.78
-})
-
-# End run with status
-record = tracker.end_validation_run(status="passed")
-
-# Query history
-history = tracker.get_validation_history(model_id="uuid-123")
-
-# Generate audit report
-report = tracker.generate_audit_report()
-print(f"Total validations: {report['summary']['total_validations']}")
-print(f"Pass rate: {report['summary']['pass_rate']:.0%}")
-```
-
-### What Gets Tracked
-- Who ran the validation
-- When it was run
-- What model and dataset were used
-- What requirements were validated
-- What metrics were calculated
-- Pass/fail status
-
-### ⚠️ Limitations
-- MLflow model registry requires full MLflow setup
-- In-memory storage in demo mode (use database in production)
+Important: suggestions are not persisted until accepted via API.
 
 ---
 
-## 10. Frontend Structure
+## 9) Traceability & Reporting
 
-```
-frontend/
-├── src/
-│   ├── main.tsx              # Entry point + font loading
-│   ├── App.tsx               # Routes + providers
-│   ├── index.css             # Global CSS (dark theme variables)
-│   ├── theme.ts              # MUI theme configuration
-│   │
-│   ├── contexts/
-│   │   └── AuthContext.tsx   # Auth state (user, login, logout)
-│   │
-│   ├── services/
-│   │   └── api.ts            # Axios with token interceptors
-│   │
-│   ├── types/
-│   │   └── index.ts          # TypeScript interfaces
-│   │
-│   ├── layouts/
-│   │   └── MainLayout.tsx    # Sidebar + AppBar
-│   │
-│   └── pages/
-│       ├── LoginPage.tsx     # Login form
-│       ├── RegisterPage.tsx  # Register form
-│       └── DashboardPage.tsx # Stats + projects overview
-```
+## 9.1 Traceability Matrix
 
-### Tech Stack
-- **Vite** - Fast build tool
-- **React 18** - UI library
-- **TypeScript** - Type safety
-- **MUI (Material-UI)** - Component library
-- **React Router** - Client-side routing
-- **React Query** - Server state management
-- **Axios** - HTTP client with interceptors
+`TraceabilityService` builds requirement-to-validation linkage:
+- requirement info,
+- model + dataset context,
+- validation/result pass/fail state,
+- root-cause oriented metadata.
+
+## 9.2 Report Generation
+
+`ReportGenerator` composes:
+- suite-level report (fairness/transparency/privacy + recommendations),
+- compliance report with traceability summary,
+- downloadable PDF variants.
 
 ---
 
-## 11. Current Capabilities vs Limitations
+## 10) Frontend Application Map
 
-### ✅ What You CAN Do
+## 10.1 App Shell & Session
+- Routing in `frontend/src/App.tsx`
+- Auth session state in `frontend/src/contexts/AuthContext.tsx`
+- Main navigation layout in `frontend/src/layouts/MainLayout.tsx`
 
-| Category | Capability |
-|----------|------------|
-| **Models** | Load sklearn, TensorFlow, PyTorch, ONNX models |
-| **Fairness** | Calculate 6 fairness metrics, generate visualizations |
-| **Transparency** | SHAP global/local explanations, LIME, model cards |
-| **Privacy** | Detect PII, check k-anonymity, check l-diversity |
-| **Accountability** | MLflow tracking, audit logs, history queries |
-| **Auth** | JWT-based login/register with role-based users |
+## 10.2 Key Pages
+- `DashboardPage`
+- `ProjectsPage` (scratch/template project creation)
+- `ProjectDetailPage` (models, datasets, requirements, validations, traceability)
+- `ValidationPage` (wizard + async progress + results)
+- `TemplateBrowserPage` / `TemplatesPage`
+- `RequirementElicitationPage`
+- `TraceabilityPage`
+- `ReportViewerPage`
+- `AuditLogPage`
 
-### ❌ What You CANNOT Do (Yet)
+## 10.3 Frontend Data Layer
 
-| Category | Limitation | Future Work |
-|----------|------------|-------------|
-| **Models** | Multi-class fairness | Extend metrics |
-| **Models** | Regression fairness | Add regression support |
-| **Fairness** | Intersectional fairness | Multi-attribute analysis |
-| **Fairness** | Bias mitigation | Add Fairlearn mitigation |
-| **Privacy** | Differential privacy training | Integrate diffprivlib models |
-| **Privacy** | Auto-anonymization | Implement generalization |
-| **Frontend** | File upload UI | In progress |
-| **Frontend** | Results visualization | In progress |
-| **API** | Project CRUD | Needs implementation |
-| **API** | Validation endpoints | Needs implementation |
-
-### Database Status
-- **Models defined**: Yes (9 SQLAlchemy models)
-- **Migrations**: Not yet (need Alembic setup)
-- **Running instance**: Requires PostgreSQL setup
+`frontend/src/services/api.ts`:
+- central axios client,
+- token injection request interceptor,
+- token refresh flow on 401,
+- typed endpoint wrapper groups (`authApi`, `projectsApi`, `validationApi`, etc.).
 
 ---
 
-## 12. API Endpoints
+## 11) End-to-End Use Cases
 
-### Implemented
+## Use Case A: Template-based Project Bootstrap
+1. User opens Projects → Create Project.
+2. Selects “Start with template”.
+3. Chooses domain template.
+4. Project is created and template requirements are applied.
+5. Requirements show source template linkage in project detail.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/auth/register` | Create new user |
-| POST | `/api/v1/auth/login` | Get JWT tokens |
-| POST | `/api/v1/auth/refresh` | Refresh access token |
-| GET | `/api/v1/auth/me` | Get current user profile |
-| GET | `/health` | Health check |
+## Use Case B: Manual Validation Run
+1. User opens project → Run Validation.
+2. Selects validation types manually.
+3. Configures model/dataset/features/checks/thresholds.
+4. Optionally links requirements and imports requirement thresholds.
+5. Runs suite and watches progress.
+6. Reviews result cards + detail pages.
 
-### Planned (Not Yet Implemented)
+## Use Case C: Template-Preset Validation Run
+1. User opens project → Run Validation.
+2. Selects template preset.
+3. Validation types + metrics/checks/thresholds auto-configure.
+4. User picks model/dataset/required columns.
+5. Runs validation and reviews outcomes.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET/POST | `/api/v1/projects` | List/create projects |
-| POST | `/api/v1/models/upload` | Upload ML model |
-| POST | `/api/v1/datasets/upload` | Upload dataset |
-| POST | `/api/v1/validate/fairness` | Run fairness validation |
-| POST | `/api/v1/validate/transparency` | Run transparency validation |
-| POST | `/api/v1/validate/privacy` | Run privacy validation |
-| GET | `/api/v1/validations/{id}` | Get validation results |
+## Use Case D: Requirement Elicitation
+1. User opens requirement elicitation page.
+2. Runs elicitation from dataset and/or model.
+3. Reviews suggestions with reason/confidence.
+4. Accepts selected suggestions into project requirements.
+
+## Use Case E: Governance/Compliance
+1. User runs validations over time.
+2. Auditors inspect Audit Log and Traceability matrix.
+3. Compliance reports are exported (JSON/PDF style endpoints).
 
 ---
 
-## 13. How to Run
+## 12) Operational Notes & Constraints
 
-### Prerequisites
-- Python 3.10+
+- Validation suite async requires **Redis + Celery worker**.
+- On Windows, Celery should use `--pool=solo`.
+- Template list emptiness usually indicates:
+  - seeding did not run successfully at startup, or
+  - backend is connected to a DB without seeded template rows.
+- Some old docs reference `venv`; your workspace currently uses `venv-314`.
+
+---
+
+## 13) Complete Startup & Operations Guide (Windows)
+
+This section is intentionally last, as requested.
+
+## 13.1 Prerequisites
+- Python 3.11+ (or your project-compatible version)
 - Node.js 18+
-- PostgreSQL 15+ (optional for auth)
-- Redis (optional for Celery)
+- Docker Desktop (for PostgreSQL and optionally Redis)
+- PowerShell
 
-### Backend
-```bash
+## 13.2 Database Startup (PostgreSQL)
+
+From repository root:
+
+```powershell
+docker-compose up -d postgres
+docker-compose ps
+```
+
+Expected DB connection defaults:
+- Host: `localhost`
+- Port: `5432`
+- DB: `ethical_ai`
+- User: `postgres`
+- Password: `postgres`
+
+## 13.3 Redis Startup (for Celery)
+
+```powershell
+docker run -d --name ethical-ai-redis -p 6379:6379 redis:7-alpine
+```
+
+If already created:
+```powershell
+docker start ethical-ai-redis
+```
+
+## 13.4 Backend Environment Configuration
+
+1. Create backend env file:
+```powershell
 cd backend
-
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Create .env from example
 copy .env.example .env
-# Edit .env with your database URL
+```
 
-# Run development server
+2. Ensure `.env` values align with your local services:
+- `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ethical_ai`
+- `REDIS_URL=redis://localhost:6379/0`
+- `CELERY_BROKER_URL=redis://localhost:6379/0`
+- `CELERY_RESULT_BACKEND=redis://localhost:6379/0`
+
+## 13.5 Python Environment + Dependencies
+
+If using existing local env in this repo:
+```powershell
+cd backend
+.\venv-314\Scripts\activate
+pip install -r requirements.txt
+```
+
+If creating a new one:
+```powershell
+cd backend
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## 13.6 Database Migrations
+
+```powershell
+cd backend
+alembic upgrade head
+```
+
+## 13.7 Start Backend API
+
+```powershell
+cd backend
+.\venv-314\Scripts\activate
 uvicorn app.main:app --reload
 ```
 
-### Frontend
-```bash
+Health check:
+- `http://localhost:8000/health`
+- API docs: `http://localhost:8000/docs`
+
+## 13.8 Start Celery Worker
+
+In a second terminal:
+
+```powershell
+cd backend
+.\venv-314\Scripts\activate
+celery -A app.celery_app worker --loglevel=info --pool=solo
+```
+
+## 13.9 Start Frontend
+
+In a third terminal:
+
+```powershell
 cd frontend
-
-# Install dependencies
 npm install
-
-# Run development server
 npm run dev
 ```
 
-### Run Example Scripts (No Server Required)
-```bash
+Frontend URL:
+- `http://localhost:5173`
+
+Ensure `frontend/.env` has:
+```dotenv
+VITE_API_URL=http://localhost:8000/api/v1
+```
+
+## 13.10 Minimal Smoke Test
+
+1. Register/login.
+2. Create project.
+3. Upload model + dataset.
+4. Open Run Validation page.
+5. Choose template preset or manual validators.
+6. Run suite.
+7. Confirm progress updates and results appear.
+8. Check audit + traceability pages.
+
+## 13.11 Common Failure Modes
+
+### Templates empty
+- Check backend startup logs for template seeding line.
+- Ensure backend connected to expected DB.
+- Restart backend after migrations.
+
+### Task stuck in `PENDING`
+- Redis not running, or Celery worker not running/connected.
+- Verify worker terminal shows registered task and ready state.
+
+### Auth errors in frontend API calls
+- Access token missing/expired.
+- Re-login and verify `/auth/me` succeeds.
+
+### Backend cannot connect DB
+- Confirm `docker-compose ps` shows postgres healthy.
+- Validate `DATABASE_URL` in backend `.env`.
+
+---
+
+## 14) Quick Reference Commands
+
+```powershell
+# Postgres
+docker-compose up -d postgres
+
+# Redis
+docker run -d --name ethical-ai-redis -p 6379:6379 redis:7-alpine
+
+# Backend
 cd backend
+.\venv-314\Scripts\activate
+alembic upgrade head
+uvicorn app.main:app --reload
 
-# Fairness validation demo
-python -m app.examples.fairness_example
+# Celery
+cd backend
+.\venv-314\Scripts\activate
+celery -A app.celery_app worker --loglevel=info --pool=solo
 
-# Transparency/SHAP demo
-python -m app.examples.transparency_example
-
-# Privacy & accountability demo
-python -m app.examples.privacy_accountability_example
+# Frontend
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
 
-## Summary
+## 15) Documentation Maintenance Policy
 
-This platform provides a **complete foundation** for validating AI systems against ethical requirements:
+When code changes, update this file if you modify any of the following:
+- route contracts,
+- validation flow logic,
+- template behavior,
+- async execution model,
+- startup/runtime requirements.
 
-1. **Load any model** (sklearn, TensorFlow, PyTorch, ONNX) through a unified interface
-2. **Check fairness** with 6 metrics using Fairlearn
-3. **Explain predictions** with SHAP and LIME
-4. **Validate privacy** with PII detection and k-anonymity
-5. **Track everything** with MLflow and audit logs
-
-The core validation engines are **fully functional** and can be used immediately via the example scripts. The web interface provides authentication and a dashboard foundation, with validation UI components as the next development phase.
+Treat this file as the implementation index for both humans and AI agents.

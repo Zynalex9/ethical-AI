@@ -333,8 +333,8 @@ export const requirementsApi = {
 
 // Templates API
 export const templatesApi = {
-    list: async () => {
-        const response = await api.get('/templates');
+    list: async (params?: { domain?: string; principle?: string; search?: string }) => {
+        const response = await api.get('/templates', { params });
         return response.data;
     },
 
@@ -350,6 +350,31 @@ export const templatesApi = {
 
     delete: async (id: string) => {
         const response = await api.delete(`/templates/${id}`);
+        return response.data;
+    },
+
+    applyToProject: async (data: {
+        project_id: string;
+        template_id: string;
+        customizations?: Record<string, any>;
+    }) => {
+        const response = await api.post('/templates/apply-to-project', data);
+        return response.data;
+    },
+
+    customize: async (templateId: string, data: {
+        name?: string;
+        description?: string;
+        rule_overrides?: Array<Record<string, any>>;
+        add_rules?: Array<Record<string, any>>;
+        remove_indices?: number[];
+    }) => {
+        const response = await api.post(`/templates/${templateId}/customize`, data);
+        return response.data;
+    },
+
+    seedDefaults: async () => {
+        const response = await api.post('/templates/seed-defaults');
         return response.data;
     },
 };

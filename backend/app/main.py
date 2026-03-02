@@ -11,7 +11,8 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
 from app.config import settings
-from app.database import init_db, close_db
+from app.database import init_db, close_db, create_engine_and_session
+from app import database
 from app.routers import auth, projects, models, datasets, validation, templates, audit, requirements, traceability, reports
 
 
@@ -25,6 +26,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print(f"Starting {settings.app_name} v{settings.app_version}")
     await init_db()
     print("Database initialized")
+
+    # Auto-seed domain templates (Phase 5 – 6.8)
+    try:
+        from app.routers.templates import _seed_templates
+        create_engine_and_session()
+        async with database.async_session_maker() as db:
+            result = await _seed_templates(db)
+            print(f"Template seeding: {result.get('message', 'done')}")
+    except Exception as exc:
+        print(f"Template seeding skipped: {exc}")
     
     yield
     

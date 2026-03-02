@@ -20,6 +20,15 @@ import {
     Chip,
     CircularProgress,
     Alert,
+    FormControl,
+    InputLabel,
+    Select,
+    MenuItem,
+    RadioGroup,
+    FormControlLabel,
+    Radio,
+    Divider,
+
 } from '@mui/material';
 import {
     Add as AddIcon,
@@ -31,8 +40,8 @@ import {
     Assignment as RequirementIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { projectsApi } from '../services/api';
-import type { Project } from '../types';
+import { getApiErrorMessage, projectsApi, templatesApi } from '../services/api';
+import type { Project, Template, TemplateRuleItem } from '../types';
 
 export default function ProjectsPage() {
     const navigate = useNavigate();
@@ -42,19 +51,51 @@ export default function ProjectsPage() {
     const [newProject, setNewProject] = useState({ name: '', description: '' });
     const [error, setError] = useState('');
 
+    // ── Template-based creation (Phase 5 – 6.6) ────────────────────
+    const [creationMode, setCreationMode] = useState<'scratch' | 'template'>('scratch');
+    const [activeStep, setActiveStep] = useState(0);
+    const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
+    const [domainFilter, setDomainFilter] = useState('');
+
     // Fetch projects
     const { data: projects, isLoading } = useQuery<Project[]>({
         queryKey: ['projects'],
         queryFn: projectsApi.list,
     });
 
+    // Fetch templates (for creation dialog)
+    const {
+        data: templates = [],
+        isLoading: templatesLoading,
+        isError: templatesIsError,
+        error: templatesError,
+    } = useQuery<Template[], Error>({
+        queryKey: ['templates', domainFilter],
+        queryFn: () => templatesApi.list({ domain: domainFilter || undefined }),
+        enabled: createOpen && creationMode === 'template',
+    });
+
+    const templatesErrorMessage = templatesIsError
+        ? getApiErrorMessage(templatesError, 'Failed to load templates')
+        : '';
+
     // Create mutation
     const createMutation = useMutation({
         mutationFn: projectsApi.create,
-        onSuccess: () => {
+        onSuccess: async (project: Project) => {
+            // If template selected, apply it
+            if (creationMode === 'template' && selectedTemplate) {
+                try {
+                    await templatesApi.applyToProject({
+                        project_id: project.id,
+                        template_id: selectedTemplate.id,
+                    });
+                } catch {
+                    // non-fatal – project was already created
+                }
+            }
             queryClient.invalidateQueries({ queryKey: ['projects'] });
-            setCreateOpen(false);
-            setNewProject({ name: '', description: '' });
+            resetCreateDialog();
         },
         onError: (err: Error) => {
             setError(err.message || 'Failed to create project');
@@ -68,6 +109,16 @@ export default function ProjectsPage() {
             queryClient.invalidateQueries({ queryKey: ['projects'] });
         },
     });
+
+    const resetCreateDialog = () => {
+        setCreateOpen(false);
+        setNewProject({ name: '', description: '' });
+        setCreationMode('scratch');
+        setActiveStep(0);
+        setSelectedTemplate(null);
+        setDomainFilter('');
+        setError('');
+    };
 
     const handleCreate = () => {
         if (!newProject.name.trim()) {
@@ -240,8 +291,8 @@ export default function ProjectsPage() {
                 )}
             </Grid>
 
-            {/* Create Dialog */}
-            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="sm" fullWidth>
+            {/* ─── Enhanced Create Dialog (6.6 – template selection) ──── */}
+            <Dialog open={createOpen} onClose={resetCreateDialog} maxWidth="md" fullWidth>
                 <DialogTitle>Create New Project</DialogTitle>
                 <DialogContent>
                     {error && (
@@ -249,32 +300,187 @@ export default function ProjectsPage() {
                             {error}
                         </Alert>
                     )}
-                    <TextField
-                        autoFocus
-                        label="Project Name"
-                        fullWidth
-                        value={newProject.name}
-                        onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
-                        sx={{ mt: 1, mb: 2 }}
-                    />
-                    <TextField
-                        label="Description"
-                        fullWidth
-                        multiline
-                        rows={3}
-                        value={newProject.description}
-                        onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
-                    />
+
+                    {creationMode === 'scratch' && activeStep === 0 && (
+                        <>
+                            <TextField
+                                autoFocus
+                                label="Project Name"
+                                fullWidth
+                                value={newProject.name}
+                                onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
+                                sx={{ mt: 1, mb: 2 }}
+                            />
+                            <TextField
+                                label="Description"
+                                fullWidth
+                                multiline
+                                rows={3}
+                                value={newProject.description}
+                                onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
+                                sx={{ mb: 3 }}
+                            />
+
+                            <Divider sx={{ mb: 2 }} />
+                            <Typography variant="subtitle2" sx={{ mb: 1 }}>Start with…</Typography>
+                            <RadioGroup
+                                value={creationMode}
+                                onChange={(e) => setCreationMode(e.target.value as 'scratch' | 'template')}
+                            >
+                                <FormControlLabel value="scratch" control={<Radio />} label="Start from scratch" />
+                                <FormControlLabel value="template" control={<Radio />} label="Start with a template" />
+                            </RadioGroup>
+                        </>
+                    )}
+
+                    {creationMode === 'template' && activeStep === 0 && (
+                        <>
+                            <TextField
+                                autoFocus
+                                label="Project Name"
+                                fullWidth
+                                value={newProject.name}
+                                onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
+                                sx={{ mt: 1, mb: 2 }}
+                            />
+                            <TextField
+                                label="Description"
+                                fullWidth
+                                multiline
+                                rows={2}
+                                value={newProject.description}
+                                onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
+                                sx={{ mb: 2 }}
+                            />
+
+                            <Divider sx={{ mb: 2 }} />
+                            <Typography variant="subtitle2" sx={{ mb: 1 }}>Start with…</Typography>
+                            <RadioGroup
+                                value={creationMode}
+                                onChange={(e) => setCreationMode(e.target.value as 'scratch' | 'template')}
+                            >
+                                <FormControlLabel value="scratch" control={<Radio />} label="Start from scratch" />
+                                <FormControlLabel value="template" control={<Radio />} label="Start with a template" />
+                            </RadioGroup>
+                        </>
+                    )}
+
+                    {/* Step 2: template picker (only when creationMode === 'template' and step 1) */}
+                    {creationMode === 'template' && activeStep === 1 && (
+                        <>
+                            <Typography variant="subtitle1" sx={{ mb: 2, fontWeight: 600 }}>
+                                Select a Template
+                            </Typography>
+                            <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+                                <InputLabel>Filter by Domain</InputLabel>
+                                <Select
+                                    value={domainFilter}
+                                    label="Filter by Domain"
+                                    onChange={(e) => setDomainFilter(e.target.value)}
+                                >
+                                    <MenuItem value="">All Domains</MenuItem>
+                                    <MenuItem value="finance">Finance</MenuItem>
+                                    <MenuItem value="healthcare">Healthcare</MenuItem>
+                                    <MenuItem value="criminal_justice">Criminal Justice</MenuItem>
+                                    <MenuItem value="employment">Employment</MenuItem>
+                                    <MenuItem value="education">Education</MenuItem>
+                                    <MenuItem value="general">General</MenuItem>
+                                </Select>
+                            </FormControl>
+
+                            <Box sx={{ maxHeight: 340, overflow: 'auto' }}>
+                                {templatesLoading && (
+                                    <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                                        <CircularProgress size={22} />
+                                    </Box>
+                                )}
+                                {!templatesLoading && templates.map((tpl) => {
+                                    const isSelected = selectedTemplate?.id === tpl.id;
+                                    const items: TemplateRuleItem[] = (tpl.rules as any)?.items || [];
+                                    return (
+                                        <Card
+                                            key={tpl.id}
+                                            variant="outlined"
+                                            sx={{
+                                                mb: 1.5,
+                                                cursor: 'pointer',
+                                                borderColor: isSelected ? 'primary.main' : 'divider',
+                                                bgcolor: isSelected ? 'rgba(102,126,234,0.06)' : 'transparent',
+                                            }}
+                                            onClick={() => setSelectedTemplate(tpl)}
+                                        >
+                                            <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <Typography variant="subtitle2">{tpl.name}</Typography>
+                                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                                        <Chip label={tpl.domain.replace('_', ' ')} size="small" sx={{ textTransform: 'capitalize' }} />
+                                                        <Chip label={`${items.length} rules`} size="small" variant="outlined" />
+                                                    </Box>
+                                                </Box>
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {tpl.description}
+                                                </Typography>
+                                            </CardContent>
+                                        </Card>
+                                    );
+                                })}
+                                {!templatesLoading && templatesIsError && (
+                                    <Alert severity="error" sx={{ py: 1 }}>
+                                        {templatesErrorMessage}
+                                    </Alert>
+                                )}
+                                {!templatesLoading && !templatesIsError && templates.length === 0 && (
+                                    <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+                                        No templates available. Templates are seeded on first server start.
+                                    </Typography>
+                                )}
+                            </Box>
+                        </>
+                    )}
                 </DialogContent>
+
                 <DialogActions>
-                    <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-                    <Button
-                        variant="contained"
-                        onClick={handleCreate}
-                        disabled={createMutation.isPending}
-                    >
-                        {createMutation.isPending ? <CircularProgress size={24} /> : 'Create'}
-                    </Button>
+                    <Button onClick={resetCreateDialog}>Cancel</Button>
+
+                    {creationMode === 'template' && activeStep === 1 && (
+                        <Button onClick={() => setActiveStep(0)}>Back</Button>
+                    )}
+
+                    {creationMode === 'template' && activeStep === 0 && (
+                        <Button
+                            variant="contained"
+                            onClick={() => {
+                                if (!newProject.name.trim()) {
+                                    setError('Project name is required');
+                                    return;
+                                }
+                                setError('');
+                                setActiveStep(1);
+                            }}
+                        >
+                            Next: Choose Template
+                        </Button>
+                    )}
+
+                    {creationMode === 'template' && activeStep === 1 && (
+                        <Button
+                            variant="contained"
+                            disabled={!selectedTemplate || createMutation.isPending}
+                            onClick={handleCreate}
+                        >
+                            {createMutation.isPending ? <CircularProgress size={24} /> : 'Create with Template'}
+                        </Button>
+                    )}
+
+                    {creationMode === 'scratch' && (
+                        <Button
+                            variant="contained"
+                            onClick={handleCreate}
+                            disabled={createMutation.isPending}
+                        >
+                            {createMutation.isPending ? <CircularProgress size={24} /> : 'Create'}
+                        </Button>
+                    )}
                 </DialogActions>
             </Dialog>
         </Container>

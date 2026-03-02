@@ -48,7 +48,8 @@ import {
     ArrowForward as NextIcon,
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
-import { modelsApi, datasetsApi, validationApi, requirementsApi, reportsApi } from '../services/api';
+import { modelsApi, datasetsApi, validationApi, requirementsApi, reportsApi, templatesApi } from '../services/api';
+import type { Template } from '../types';
 
 // ─── Validator definitions ────────────────────────────────────────────────────
 interface ValidatorDef {
@@ -137,11 +138,30 @@ const FAIRNESS_METRICS = [
     { key: 'disparate_impact_ratio', label: 'Disparate Impact Ratio', defaultThreshold: 0.8 },
 ];
 
+const DEFAULT_FAIRNESS_METRICS = [
+    'demographic_parity_ratio',
+    'equalized_odds_ratio',
+    'disparate_impact_ratio',
+];
+
+const DEFAULT_FAIRNESS_THRESHOLDS: Record<string, number> = {
+    demographic_parity_ratio: 0.8,
+    demographic_parity_difference: 0.1,
+    equalized_odds_ratio: 0.8,
+    equalized_odds_difference: 0.1,
+    equal_opportunity_difference: 0.1,
+    disparate_impact_ratio: 0.8,
+};
+
 const PRIVACY_CHECKS = [
     { key: 'pii_detection', label: 'PII Detection' },
     { key: 'k_anonymity', label: 'k-Anonymity' },
     { key: 'l_diversity', label: 'l-Diversity' },
 ];
+
+const DEFAULT_PRIVACY_CHECKS = ['pii_detection', 'k_anonymity'];
+const FAIRNESS_METRIC_KEYS = new Set(FAIRNESS_METRICS.map((m) => m.key));
+const TRANSPARENCY_TEMPLATE_METRICS = new Set(['shap_coverage', 'model_card_completeness', 'explanation_required']);
 
 const PassChip = ({ passed }: { passed: boolean }) => (
     <Chip label={passed ? '✓ Pass' : '✗ Fail'} color={passed ? 'success' : 'error'} size="small" />
@@ -161,29 +181,16 @@ export default function ValidationPage() {
     const [expandedValidator, setExpandedValidator] = useState<string | null>(null);
 
     // Form fields
+    const [selectedTemplateId, setSelectedTemplateId] = useState('');
     const [selectedModel, setSelectedModel] = useState('');
     const [selectedDataset, setSelectedDataset] = useState('');
     const [sensitiveFeature, setSensitiveFeature] = useState('');
     const [targetColumn, setTargetColumn] = useState('');
     const [quasiIdentifiers, setQuasiIdentifiers] = useState<string[]>([]);
     const [sensitiveAttribute, setSensitiveAttribute] = useState('');
-    const [selectedFairnessMetrics, setSelectedFairnessMetrics] = useState<string[]>([
-        'demographic_parity_ratio',
-        'equalized_odds_ratio',
-        'disparate_impact_ratio',
-    ]);
-    const [fairnessThresholds, setFairnessThresholds] = useState<Record<string, number>>({
-        demographic_parity_ratio: 0.8,
-        demographic_parity_difference: 0.1,
-        equalized_odds_ratio: 0.8,
-        equalized_odds_difference: 0.1,
-        equal_opportunity_difference: 0.1,
-        disparate_impact_ratio: 0.8,
-    });
-    const [selectedPrivacyChecks, setSelectedPrivacyChecks] = useState<string[]>([
-        'pii_detection',
-        'k_anonymity',
-    ]);
+    const [selectedFairnessMetrics, setSelectedFairnessMetrics] = useState<string[]>(DEFAULT_FAIRNESS_METRICS);
+    const [fairnessThresholds, setFairnessThresholds] = useState<Record<string, number>>(DEFAULT_FAIRNESS_THRESHOLDS);
+    const [selectedPrivacyChecks, setSelectedPrivacyChecks] = useState<string[]>(DEFAULT_PRIVACY_CHECKS);
     const [kAnonymityK, setKAnonymityK] = useState<number>(5);
     const [lDiversityL, setLDiversityL] = useState<number>(2);
     const [formError, setFormError] = useState('');
@@ -235,7 +242,88 @@ export default function ValidationPage() {
         queryFn: () => requirementsApi.listByProject(id!),
         enabled: !!id,
     });
+    const { data: templates = [] } = useQuery<Template[]>({
+        queryKey: ['templates', 'validation-presets'],
+        queryFn: () => templatesApi.list(),
+        enabled: !!id,
+    });
     const selectedDatasetObj = datasets?.find((d: any) => d.id === selectedDataset);
+    const isTemplatePresetActive = selectedTemplateId !== '';
+
+    const applyTemplatePreset = (template: Template) => {
+        const validatorSet = new Set<string>();
+        const fairnessMetricSet = new Set<string>();
+        const privacyCheckSet = new Set<string>();
+        const newThresholds: Record<string, number> = { ...DEFAULT_FAIRNESS_THRESHOLDS };
+        let newK = 5;
+        let newL = 2;
+
+        (template.rules?.principles || []).forEach((p) => {
+            const principle = (p || '').toLowerCase();
+            if (['fairness', 'transparency', 'privacy', 'accountability'].includes(principle)) {
+                validatorSet.add(principle);
+            }
+        });
+
+        for (const item of template.rules?.items || []) {
+            const metric = (item.metric || '').toLowerCase();
+            const principle = (item.principle || '').toLowerCase();
+
+            if (['fairness', 'transparency', 'privacy', 'accountability'].includes(principle)) {
+                validatorSet.add(principle);
+            }
+
+            if (FAIRNESS_METRIC_KEYS.has(metric)) {
+                validatorSet.add('fairness');
+                fairnessMetricSet.add(metric);
+                if (typeof item.value === 'number') {
+                    newThresholds[metric] = item.value;
+                }
+            }
+
+            if (TRANSPARENCY_TEMPLATE_METRICS.has(metric)) {
+                validatorSet.add('transparency');
+            }
+
+            if (metric.includes('pii')) {
+                validatorSet.add('privacy');
+                privacyCheckSet.add('pii_detection');
+            }
+
+            if (['k_anonymity', 'k_anonymity_k', 'k_value'].includes(metric)) {
+                validatorSet.add('privacy');
+                privacyCheckSet.add('k_anonymity');
+                if (typeof item.value === 'number') {
+                    newK = Math.max(1, Math.round(item.value));
+                }
+            }
+
+            if (['l_diversity', 'l_diversity_l', 'l_value'].includes(metric)) {
+                validatorSet.add('privacy');
+                privacyCheckSet.add('l_diversity');
+                if (typeof item.value === 'number') {
+                    newL = Math.max(1, Math.round(item.value));
+                }
+            }
+
+            if (metric === 'audit_trail_required') {
+                validatorSet.add('accountability');
+            }
+        }
+
+        const validators = Array.from(validatorSet);
+        const fairnessMetrics = fairnessMetricSet.size > 0 ? Array.from(fairnessMetricSet) : DEFAULT_FAIRNESS_METRICS;
+        const privacyChecks = privacyCheckSet.size > 0 ? Array.from(privacyCheckSet) : DEFAULT_PRIVACY_CHECKS;
+
+        setSelectedValidators(validators);
+        setSelectedFairnessMetrics(fairnessMetrics);
+        setFairnessThresholds(newThresholds);
+        setSelectedPrivacyChecks(privacyChecks);
+        setKAnonymityK(newK);
+        setLDiversityL(newL);
+        setSelectedRequirements([]);
+        setUseRequirementThresholds(false);
+    };
 
     // Poll task
     useEffect(() => {
@@ -267,18 +355,24 @@ export default function ValidationPage() {
         return () => clearInterval(interval);
     }, [taskId, isRunning, suiteId]);
 
-    const toggleValidator = (key: string) =>
+    const toggleValidator = (key: string) => {
+        if (isTemplatePresetActive) return;
         setSelectedValidators((prev) => prev.includes(key) ? prev.filter((v) => v !== key) : [...prev, key]);
+    };
 
-    const toggleFairnessMetric = (metric: string) =>
+    const toggleFairnessMetric = (metric: string) => {
+        if (isTemplatePresetActive) return;
         setSelectedFairnessMetrics((prev) =>
             prev.includes(metric) ? prev.filter((m) => m !== metric) : [...prev, metric]
         );
+    };
 
-    const togglePrivacyCheck = (check: string) =>
+    const togglePrivacyCheck = (check: string) => {
+        if (isTemplatePresetActive) return;
         setSelectedPrivacyChecks((prev) =>
             prev.includes(check) ? prev.filter((c) => c !== check) : [...prev, check]
         );
+    };
 
     const needsSensitiveFeature = selectedValidators.includes('fairness');
     const needsModel = selectedValidators.includes('fairness') || selectedValidators.includes('transparency');
@@ -392,6 +486,7 @@ export default function ValidationPage() {
 
     const handleReset = () => {
         setActiveStep(0);
+        setSelectedTemplateId('');
         setSelectedValidators([]);
         setExpandedValidator(null);
         setSelectedModel('');
@@ -400,16 +495,9 @@ export default function ValidationPage() {
         setTargetColumn('');
         setQuasiIdentifiers([]);
         setSensitiveAttribute('');
-        setSelectedFairnessMetrics(['demographic_parity_ratio', 'equalized_odds_ratio', 'disparate_impact_ratio']);
-        setFairnessThresholds({
-            demographic_parity_ratio: 0.8,
-            demographic_parity_difference: 0.1,
-            equalized_odds_ratio: 0.8,
-            equalized_odds_difference: 0.1,
-            equal_opportunity_difference: 0.1,
-            disparate_impact_ratio: 0.8,
-        });
-        setSelectedPrivacyChecks(['pii_detection', 'k_anonymity']);
+        setSelectedFairnessMetrics(DEFAULT_FAIRNESS_METRICS);
+        setFairnessThresholds(DEFAULT_FAIRNESS_THRESHOLDS);
+        setSelectedPrivacyChecks(DEFAULT_PRIVACY_CHECKS);
         setKAnonymityK(5);
         setLDiversityL(2);
         setSelectedRequirements([]);
@@ -500,13 +588,63 @@ export default function ValidationPage() {
                             <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
                                 Click a card to select it. Press the <InfoIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> icon for a full description.
                             </Typography>
-                            <Button size="small" startIcon={<CheckBoxIcon />} onClick={() => setSelectedValidators(VALIDATORS.map((v) => v.key))}>
+                            <Button
+                                size="small"
+                                startIcon={<CheckBoxIcon />}
+                                disabled={isTemplatePresetActive}
+                                onClick={() => setSelectedValidators(VALIDATORS.map((v) => v.key))}
+                            >
                                 Select All
                             </Button>
-                            <Button size="small" startIcon={<CheckBoxBlankIcon />} color="inherit" onClick={() => setSelectedValidators([])}>
+                            <Button
+                                size="small"
+                                startIcon={<CheckBoxBlankIcon />}
+                                color="inherit"
+                                disabled={isTemplatePresetActive}
+                                onClick={() => setSelectedValidators([])}
+                            >
                                 Clear
                             </Button>
                         </Box>
+
+                        <Card variant="outlined" sx={{ mb: 2 }}>
+                            <CardContent>
+                                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700 }}>
+                                    Template Preset (Optional)
+                                </Typography>
+                                <FormControl fullWidth>
+                                    <InputLabel>Select Template</InputLabel>
+                                    <Select
+                                        value={selectedTemplateId}
+                                        label="Select Template"
+                                        onChange={(e) => {
+                                            const templateId = e.target.value;
+                                            setSelectedTemplateId(templateId);
+                                            if (!templateId) return;
+                                            const preset = templates.find((tpl) => tpl.id === templateId);
+                                            if (preset) {
+                                                applyTemplatePreset(preset);
+                                            }
+                                        }}
+                                    >
+                                        <MenuItem value="">
+                                            <em>No template preset (manual)</em>
+                                        </MenuItem>
+                                        {templates.map((tpl) => (
+                                            <MenuItem key={tpl.id} value={tpl.id}>
+                                                {tpl.name}
+                                            </MenuItem>
+                                        ))}
+                                    </Select>
+                                </FormControl>
+                                {isTemplatePresetActive && (
+                                    <Alert severity="info" sx={{ mt: 1.5 }}>
+                                        Template preset applied: validation types and metrics are auto-configured.
+                                        Continue to choose model, dataset, and dataset columns.
+                                    </Alert>
+                                )}
+                            </CardContent>
+                        </Card>
 
                         {/* Validator grid */}
                         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2.5, mb: 3 }}>
@@ -523,7 +661,8 @@ export default function ValidationPage() {
                                             borderColor: isSelected ? v.borderColor : 'divider',
                                             bgcolor: isSelected ? v.bgColor : 'background.paper',
                                             transition: 'all 0.2s ease',
-                                            cursor: 'pointer',
+                                            cursor: isTemplatePresetActive ? 'not-allowed' : 'pointer',
+                                            opacity: isTemplatePresetActive ? 0.75 : 1,
                                             '&:hover': { borderColor: v.borderColor, boxShadow: 4 },
                                         }}
                                     >
@@ -625,6 +764,12 @@ export default function ValidationPage() {
                                     );
                                 })}
                             </Box>
+
+                            {isTemplatePresetActive && (
+                                <Alert severity="info" sx={{ mb: 2 }}>
+                                    Template preset is active. Validation metrics/checks and thresholds are locked to template defaults.
+                                </Alert>
+                            )}
 
                             {formError && (
                                 <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFormError('')}>{formError}</Alert>
@@ -734,6 +879,7 @@ export default function ValidationPage() {
                                                         control={
                                                             <Checkbox
                                                                 checked={selectedFairnessMetrics.includes(metric.key)}
+                                                                disabled={isTemplatePresetActive}
                                                                 onChange={() => toggleFairnessMetric(metric.key)}
                                                             />
                                                         }
@@ -760,6 +906,7 @@ export default function ValidationPage() {
                                                                 ...prev,
                                                                 [metric.key]: Number(e.target.value),
                                                             }))}
+                                                            disabled={isTemplatePresetActive}
                                                             inputProps={{ step: 0.01 }}
                                                             sx={{ minWidth: 280 }}
                                                         />
@@ -787,6 +934,7 @@ export default function ValidationPage() {
                                                         control={
                                                             <Checkbox
                                                                 checked={selectedPrivacyChecks.includes(check.key)}
+                                                                disabled={isTemplatePresetActive}
                                                                 onChange={() => togglePrivacyCheck(check.key)}
                                                             />
                                                         }
@@ -836,6 +984,7 @@ export default function ValidationPage() {
                                                         type="number"
                                                         value={kAnonymityK}
                                                         onChange={(e) => setKAnonymityK(Number(e.target.value))}
+                                                        disabled={isTemplatePresetActive}
                                                         inputProps={{ min: 1, step: 1 }}
                                                     />
                                                 </Box>
@@ -875,6 +1024,7 @@ export default function ValidationPage() {
                                                         type="number"
                                                         value={lDiversityL}
                                                         onChange={(e) => setLDiversityL(Number(e.target.value))}
+                                                        disabled={isTemplatePresetActive}
                                                         inputProps={{ min: 1, step: 1 }}
                                                     />
                                                 </Box>

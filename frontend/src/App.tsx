@@ -18,6 +18,7 @@ import ValidationPage from './pages/ValidationPage';
 import PrivacyDetailPage from './pages/PrivacyDetailPage';
 import TransparencyDetailPage from './pages/TransparencyDetailPage';
 import TemplatesPage from './pages/TemplatesPage';
+import TemplateBrowserPage from './pages/TemplateBrowserPage';
 import AuditLogPage from './pages/AuditLogPage';
 import RequirementElicitationPage from './pages/RequirementElicitationPage';
 import TraceabilityPage from './pages/TraceabilityPage';
@@ -152,7 +153,8 @@ function AppRoutes() {
         <Route path="validations" element={<ValidationPage />} />
         <Route path="validations/:validationId/privacy" element={<PrivacyDetailPage />} />
         <Route path="validations/:validationId/transparency" element={<TransparencyDetailPage />} />
-        <Route path="templates" element={<TemplatesPage />} />
+        <Route path="templates" element={<TemplateBrowserPage />} />
+        <Route path="templates/manage" element={<TemplatesPage />} />
         <Route path="audit" element={<AuditLogPage />} />
         <Route path="profile" element={<PlaceholderPage title="Profile" />} />
         <Route path="settings" element={<PlaceholderPage title="Settings" />} />

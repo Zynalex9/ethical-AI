@@ -53,15 +53,31 @@ export interface Dataset {
 }
 
 // Template types
+export interface TemplateRuleItem {
+    metric: string;
+    operator: string;
+    value: number;
+    principle?: string;
+    description?: string;
+}
+
+export interface TemplateRules {
+    principles: string[];
+    reference: string;
+    items: TemplateRuleItem[];
+}
+
 export interface Template {
     id: string;
     template_id: string;
     name: string;
     description: string | null;
     domain: 'finance' | 'healthcare' | 'criminal_justice' | 'education' | 'employment' | 'general';
-    rules: Record<string, unknown>;
+    rules: TemplateRules;
     version: number;
     is_active: boolean;
+    created_at: string;
+    updated_at: string;
 }
 
 // Requirement types
