@@ -15,6 +15,8 @@ import {
     Divider,
     Chip,
     Alert,
+    AlertTitle,
+    Collapse,
     Skeleton,
     Paper,
     Table,
@@ -60,6 +62,9 @@ export default function RequirementElicitationPage() {
     const { id: projectId } = useParams<{ id: string }>();
     const navigate          = useNavigate();
     const queryClient       = useQueryClient();
+
+    // Elicitation explanation banner
+    const [showExplainer, setShowExplainer] = useState(true);
 
     // Analysis selections
     const [selectedDataset,  setSelectedDataset]  = useState('');
@@ -221,6 +226,35 @@ export default function RequirementElicitationPage() {
                     {elicitError}
                 </Alert>
             )}
+
+            {/* ── What is elicitation? banner ─────────────────────────────── */}
+            <Collapse in={showExplainer}>
+                <Alert
+                    severity="info"
+                    sx={{ mb: 3 }}
+                    onClose={() => setShowExplainer(false)}
+                >
+                    <AlertTitle sx={{ fontWeight: 700 }}>What is Requirement Elicitation?</AlertTitle>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                        <strong>Elicitation</strong> is the <em>discovery phase</em>. This page scans your dataset
+                        (column names, class distributions, PII patterns) and your model&apos;s predictions to
+                        automatically <strong>suggest</strong> ethical requirements — for example:
+                        &ldquo;Demographic parity ratio should be ≥ 0.8&rdquo; or &ldquo;No direct PII columns&rdquo;.
+                        You can review each suggestion and save the ones that apply to your project.
+                    </Typography>
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                        <strong>Elicitation ≠ Validation.</strong> Elicitation only <em>identifies</em> what to
+                        check — it does not run any metric calculations. Head to the{' '}
+                        <strong>Validation</strong> page to <em>test</em> whether your model actually satisfies
+                        the saved requirements.
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>
+                        <Chip label="1. Analyse dataset / model here" size="small" color="info" variant="outlined" />
+                        <Chip label="2. Review &amp; save requirements" size="small" color="info" variant="outlined" />
+                        <Chip label="3. Test them on the Validation page" size="small" color="info" variant="outlined" />
+                    </Box>
+                </Alert>
+            </Collapse>
 
             <Grid container spacing={3} sx={{ mt: 0 }} columns={{ xs: 12, md: 12 }}>
                 {/* ── Dataset Analysis ─────────────────────────────────────── */}

@@ -59,6 +59,19 @@ class FairnessValidationRequest(BaseModel):
     selected_metrics: Optional[List[str]] = None
 
 
+class FairnessFromPredictionsRequest(BaseModel):
+    """
+    Run fairness analysis using a dataset that already contains model predictions.
+    No separate ML model file is needed.
+    """
+    dataset_id: UUID
+    sensitive_feature: str
+    prediction_column: str        # column in the dataset holding predicted labels / scores
+    actual_column: Optional[str] = None   # ground-truth column (improves metric set when provided)
+    thresholds: Optional[Dict[str, float]] = None
+    selected_metrics: Optional[List[str]] = None
+
+
 class TransparencyValidationRequest(BaseModel):
     model_id: UUID
     dataset_id: UUID
@@ -305,6 +318,126 @@ async def run_fairness_validation(
         await db.commit()
         
         logger.error("Fairness validation failed: id=%s error=%s", validation.id, e)
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+
+
+@router.post("/fairness-from-predictions", response_model=FairnessResultResponse)
+async def run_fairness_from_predictions(
+    request: FairnessFromPredictionsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Run fairness validation using predictions that are already stored inside the dataset.
+
+    Use this when you have a CSV that contains both the sensitive feature column and a
+    column with the model's predicted labels – without needing to upload the model file
+    itself.  If you also provide ``actual_column`` (ground truth), threshold-based metrics
+    such as Equalized Odds can be computed; otherwise only group-parity metrics are used.
+
+    Note: Explainability / SHAP analysis is not available in this mode because the model
+    file is not present.
+    """
+    # Load dataset record
+    result = await db.execute(select(Dataset).where(Dataset.id == request.dataset_id))
+    dataset_record = result.scalar_one_or_none()
+    if not dataset_record:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    # Verify project access
+    if not await verify_access(db, current_user, dataset_record.project_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not dataset_record.file_path or not os.path.exists(dataset_record.file_path):
+        raise HTTPException(status_code=400, detail="Dataset file is missing on disk. Please re-upload.")
+
+    cols = dataset_record.columns or []
+    if request.sensitive_feature not in cols:
+        raise HTTPException(status_code=400, detail=f"Sensitive feature '{request.sensitive_feature}' not found in dataset")
+    if request.prediction_column not in cols:
+        raise HTTPException(status_code=400, detail=f"Prediction column '{request.prediction_column}' not found in dataset")
+    if request.actual_column and request.actual_column not in cols:
+        raise HTTPException(status_code=400, detail=f"Actual column '{request.actual_column}' not found in dataset")
+
+    # Create validation record (no model_id)
+    validation = Validation(
+        dataset_id=dataset_record.id,
+        status=ValidationStatus.RUNNING,
+        progress=0,
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(validation)
+    await db.commit()
+    await db.refresh(validation)
+
+    logger.info(
+        "Fairness-from-predictions validation started: id=%s dataset=%s pred_col=%s",
+        validation.id, dataset_record.name, request.prediction_column,
+    )
+
+    try:
+        df = pd.read_csv(dataset_record.file_path)
+
+        y_pred = df[request.prediction_column].values
+        y_true = df[request.actual_column].values if request.actual_column else y_pred
+        sensitive = df[request.sensitive_feature].values
+
+        thresholds = request.thresholds or {
+            "demographic_parity_ratio": 0.8,
+            "equalized_odds_ratio": 0.8,
+            "disparate_impact_ratio": 0.8,
+        }
+
+        validator = FairnessValidator(y_true=y_true, y_pred=y_pred, sensitive_features=sensitive)
+        report = validator.validate_all(thresholds=thresholds, selected_metrics=request.selected_metrics)
+
+        validation.status = ValidationStatus.COMPLETED
+        validation.progress = 100
+        validation.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        # Audit log
+        audit = AuditLog(
+            user_id=current_user.id,
+            action=AuditAction.VALIDATION_RUN,
+            resource_type=ResourceType.VALIDATION,
+            resource_id=validation.id,
+            details={
+                "validation_type": "fairness_from_predictions",
+                "dataset_name": dataset_record.name,
+                "prediction_column": request.prediction_column,
+                "passed": report.overall_passed,
+            },
+        )
+        db.add(audit)
+        await db.commit()
+
+        logger.info("Fairness-from-predictions completed: id=%s passed=%s", validation.id, report.overall_passed)
+
+        metrics = {}
+        for m in report.metrics:
+            metrics[m.metric_name] = {
+                "value": m.overall_value,
+                "threshold": m.threshold,
+                "passed": m.passed,
+                "by_group": m.by_group,
+            }
+
+        return FairnessResultResponse(
+            validation_id=validation.id,
+            status="completed",
+            overall_passed=report.overall_passed,
+            metrics=metrics,
+            group_metrics={"groups": report.groups, "sample_sizes": report.sample_sizes},
+            visualizations=report.visualizations,
+        )
+
+    except Exception as e:
+        validation.status = ValidationStatus.FAILED
+        validation.error_message = str(e)
+        validation.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        logger.error("Fairness-from-predictions failed: id=%s error=%s", validation.id, e)
         raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
 
 

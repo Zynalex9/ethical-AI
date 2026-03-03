@@ -282,10 +282,20 @@ class RequirementElicitor:
         feature_cols = [c for c in df.columns if c != target] if target else list(df.columns)
         sensitive_attrs = dataset_obj.sensitive_attributes or []
 
-        X = df[feature_cols].select_dtypes(include=[np.number]).fillna(0)
+        X = df[feature_cols].copy()
+        # Label-encode categorical columns so feature count matches what the model was trained on
+        for col in X.select_dtypes(include=["object", "category"]).columns:
+            X[col] = pd.factorize(X[col])[0].astype(float)
+        X = X.fillna(0)
+
         if X.empty or len(X) == 0:
-            logger.warning("No numeric features after preprocessing — skipping model elicitation")
+            logger.warning("No features after preprocessing — skipping model elicitation")
             return requirements
+
+        logger.debug(
+            "Elicitation feature matrix: %d rows × %d cols (model expects features from training)",
+            X.shape[0], X.shape[1],
+        )
 
         try:
             preds = model.predict(X.values)

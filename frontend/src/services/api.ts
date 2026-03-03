@@ -273,6 +273,19 @@ export const validationApi = {
         return response.data;
     },
 
+    // Fairness validation using predictions already in the dataset (no model file needed)
+    fairnessFromPredictions: async (data: {
+        dataset_id: string;
+        sensitive_feature: string;
+        prediction_column: string;
+        actual_column?: string | null;
+        thresholds?: Record<string, number>;
+        selected_metrics?: string[];
+    }) => {
+        const response = await api.post('/validate/fairness-from-predictions', data);
+        return response.data;
+    },
+
     // Get validation history
     getHistory: async (projectId: string) => {
         const response = await api.get(`/validate/history/${projectId}`);

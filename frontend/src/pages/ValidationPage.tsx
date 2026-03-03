@@ -78,7 +78,9 @@ const VALIDATORS: ValidatorDef[] = [
             'Checks whether the model treats different demographic groups equitably. ' +
             'Computes Demographic Parity Ratio, Equalized Odds Ratio, and Disparate Impact Ratio using Fairlearn. ' +
             'Requires a sensitive feature (e.g. gender, race) and optionally a target (ground truth) column. ' +
-            'Without a target column, fairness is measured using model predictions as a proxy.',
+            'Without a target column, fairness is measured using model predictions as a proxy. ' +
+            'New: if your dataset already contains a prediction column you can skip the model upload entirely — ' +
+            'select “Use predictions already in dataset” in the configuration step.',
         requiresSensitiveFeature: true,
         requiresModel: true,
     },
@@ -194,6 +196,11 @@ export default function ValidationPage() {
     const [kAnonymityK, setKAnonymityK] = useState<number>(5);
     const [lDiversityL, setLDiversityL] = useState<number>(2);
     const [formError, setFormError] = useState('');
+
+    // Dataset-predictions mode (fairness without uploading a model)
+    const [predictionMode, setPredictionMode] = useState<'model' | 'dataset'>('model');
+    const [predictionColumn, setPredictionColumn] = useState('');
+    const [actualColumn, setActualColumn] = useState('');
 
     // Requirements selection
     const [selectedRequirements, setSelectedRequirements] = useState<string[]>([]);
@@ -375,7 +382,8 @@ export default function ValidationPage() {
     };
 
     const needsSensitiveFeature = selectedValidators.includes('fairness');
-    const needsModel = selectedValidators.includes('fairness') || selectedValidators.includes('transparency');
+    const needsModel = selectedValidators.includes('transparency') ||
+        (selectedValidators.includes('fairness') && predictionMode === 'model');
     const needsQuasiIdentifiers = selectedPrivacyChecks.includes('k_anonymity') || selectedPrivacyChecks.includes('l_diversity');
     const needsSensitiveAttribute = selectedPrivacyChecks.includes('l_diversity');
 
@@ -383,6 +391,9 @@ export default function ValidationPage() {
         if (!selectedDataset) return 'Please select a dataset.';
         if (needsModel && !selectedModel) return 'Please select a model (required for Fairness / Transparency).';
         if (needsSensitiveFeature && !sensitiveFeature) return 'Please select a Sensitive Feature (required for Fairness).';
+        if (selectedValidators.includes('fairness') && predictionMode === 'dataset' && !predictionColumn) {
+            return 'Please select the Prediction Column (the column in your dataset that holds model predictions).';
+        }
         if (selectedValidators.includes('fairness') && selectedFairnessMetrics.length === 0) {
             return 'Please select at least one fairness metric.';
         }
@@ -443,7 +454,7 @@ export default function ValidationPage() {
         const configErr = validateConfig();
         if (configErr) { setFormError(configErr); return; }
         setFormError('');
-        if (!skipWarning && selectedValidators.includes('fairness') && !targetColumn) {
+        if (!skipWarning && selectedValidators.includes('fairness') && predictionMode === 'model' && !targetColumn) {
             setShowWarningDialog(true);
             return;
         }
@@ -452,6 +463,38 @@ export default function ValidationPage() {
         setCurrentStep('Queuing validations…');
         setRunError('');
         try {
+            // Dataset-predictions fairness mode: call the dedicated endpoint directly
+            if (predictionMode === 'dataset' && selectedValidators.includes('fairness') && selectedValidators.length === 1) {
+                setCurrentStep('Running fairness from dataset predictions…');
+                const fairnessResult = await validationApi.fairnessFromPredictions({
+                    dataset_id: selectedDataset,
+                    sensitive_feature: sensitiveFeature,
+                    prediction_column: predictionColumn,
+                    actual_column: actualColumn || null,
+                    selected_metrics: selectedFairnessMetrics,
+                    thresholds: selectedFairnessMetrics.reduce((acc, m) => { acc[m] = fairnessThresholds[m]; return acc; }, {} as Record<string, number>),
+                });
+                // Wrap the result in a pseudo-suite shape so results render correctly
+                setResults({
+                    suite_id: null,
+                    overall_passed: fairnessResult.overall_passed,
+                    validations: [
+                        {
+                            type: 'fairness',
+                            status: 'completed',
+                            passed: fairnessResult.overall_passed,
+                            validation_id: fairnessResult.validation_id,
+                            result: fairnessResult,
+                        },
+                    ],
+                });
+                setProgress(100);
+                setCurrentStep('Completed');
+                setIsRunning(false);
+                setActiveStep(3);
+                return;
+            }
+
             const response = await validationApi.runAll({
                 model_id: selectedModel,
                 dataset_id: selectedDataset,
@@ -502,6 +545,9 @@ export default function ValidationPage() {
         setLDiversityL(2);
         setSelectedRequirements([]);
         setUseRequirementThresholds(false);
+        setPredictionMode('model');
+        setPredictionColumn('');
+        setActualColumn('');
         setIsRunning(false);
         setTaskId('');
         setSuiteId('');
@@ -584,6 +630,16 @@ export default function ValidationPage() {
                 {/* ── STEP 0: SELECT VALIDATORS ──────────────────────────────── */}
                 {activeStep === 0 && (
                     <Box>
+                        {/* Quick usage guide */}
+                        <Alert severity="info" icon={false} sx={{ mb: 2, py: 1 }}>
+                            <Typography variant="body2">
+                                <strong>How to use this page:</strong>&ensp;
+                                <strong>Step 1</strong> — tick the validations you want (Fairness, Transparency, Privacy, Accountability).
+                                &ensp;<strong>Step 2</strong> — pick your model &amp; dataset and tune thresholds.
+                                &ensp;<strong>Step 3</strong> — optionally link saved requirements whose thresholds will override defaults.
+                                &ensp;<strong>Step 4</strong> — view pass/fail results and download a PDF report.
+                            </Typography>
+                        </Alert>
                         <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center' }}>
                             <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
                                 Click a card to select it. Press the <InfoIcon sx={{ fontSize: 14, verticalAlign: 'middle' }} /> icon for a full description.
@@ -677,10 +733,18 @@ export default function ValidationPage() {
                                                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: isExpanded ? 0 : 0 }}>
                                                         <Box sx={{ color: v.color }}>{v.icon}</Box>
                                                         <Box>
-                                                            <Typography variant="h6" sx={{ fontWeight: 700, color: v.color, lineHeight: 1.2 }}>
+                                            <Typography variant="h6" sx={{ fontWeight: 700, color: v.color, lineHeight: 1.2 }}>
                                                                 {v.label}
                                                             </Typography>
                                                             <Typography variant="body2" color="text.secondary">{v.shortDesc}</Typography>
+                                                            <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
+                                                                {v.requiresModel && (
+                                                                    <Chip label="Needs model" size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+                                                                )}
+                                                                {v.requiresSensitiveFeature && (
+                                                                    <Chip label="Sensitive column" size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+                                                                )}
+                                                            </Box>
                                                         </Box>
                                                     </Box>
                                                     {isExpanded && (
@@ -791,13 +855,17 @@ export default function ValidationPage() {
                                     </FormControl>
                                 </Box>
 
-                                {/* Model — only if fairness/transparency selected */}
+                                {/* Model — only if fairness(model mode)/transparency selected */}
                                 {needsModel && (
                                     <Box>
                                         <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
                                             Model <span style={{ color: 'red' }}>*</span>
                                             <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                                                (required for Fairness / Transparency)
+                                                {selectedValidators.includes('transparency') && !selectedValidators.includes('fairness')
+                                                    ? '(required for Transparency)'
+                                                    : selectedValidators.includes('fairness') && predictionMode === 'model'
+                                                        ? '(required for Fairness / Transparency)'
+                                                        : '(required for Transparency)'}
                                             </Typography>
                                         </Typography>
                                         <FormControl fullWidth>
@@ -817,6 +885,87 @@ export default function ValidationPage() {
                                         <Divider>
                                             <Chip label="Fairness Settings" size="small" sx={{ bgcolor: '#e8f5e9', color: '#2e7d32' }} />
                                         </Divider>
+
+                                        {/* Prediction source toggle */}
+                                        <Box>
+                                            <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                Prediction Source
+                                            </Typography>
+                                            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                                                <Button
+                                                    variant={predictionMode === 'model' ? 'contained' : 'outlined'}
+                                                    size="small"
+                                                    onClick={() => setPredictionMode('model')}
+                                                    sx={{ textTransform: 'none' }}
+                                                >
+                                                    Run predictions with uploaded model
+                                                </Button>
+                                                <Button
+                                                    variant={predictionMode === 'dataset' ? 'contained' : 'outlined'}
+                                                    color="secondary"
+                                                    size="small"
+                                                    onClick={() => setPredictionMode('dataset')}
+                                                    sx={{ textTransform: 'none' }}
+                                                >
+                                                    Use predictions already in dataset
+                                                </Button>
+                                            </Box>
+                                            {predictionMode === 'dataset' && selectedValidators.length > 1 && (
+                                                <Alert severity="warning" sx={{ mt: 1 }}>
+                                                    Dataset-predictions mode supports Fairness only. Either deselect other validators or switch back to model mode.
+                                                </Alert>
+                                            )}
+                                        </Box>
+
+                                        {/* Prediction column selectors (dataset mode) */}
+                                        {predictionMode === 'dataset' && (
+                                            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                                                <Box sx={{ flex: '1 1 45%', minWidth: 240 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                        Prediction Column <span style={{ color: 'red' }}>*</span>
+                                                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                                                            (column holding predicted labels)
+                                                        </Typography>
+                                                    </Typography>
+                                                    <FormControl fullWidth>
+                                                        <InputLabel>Select column</InputLabel>
+                                                        <Select
+                                                            value={predictionColumn}
+                                                            label="Select column"
+                                                            onChange={(e) => setPredictionColumn(e.target.value)}
+                                                            disabled={!selectedDataset}
+                                                        >
+                                                            {selectedDatasetObj?.columns?.map((col: string) => (
+                                                                <MenuItem key={col} value={col}>{col}</MenuItem>
+                                                            ))}
+                                                        </Select>
+                                                    </FormControl>
+                                                </Box>
+                                                <Box sx={{ flex: '1 1 45%', minWidth: 240 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                        Actual / Ground-Truth Column
+                                                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                                                            (optional – unlocks more metrics)
+                                                        </Typography>
+                                                    </Typography>
+                                                    <FormControl fullWidth>
+                                                        <InputLabel>Select column</InputLabel>
+                                                        <Select
+                                                            value={actualColumn}
+                                                            label="Select column"
+                                                            onChange={(e) => setActualColumn(e.target.value)}
+                                                            disabled={!selectedDataset}
+                                                        >
+                                                            <MenuItem value=""><em>None</em></MenuItem>
+                                                            {selectedDatasetObj?.columns?.map((col: string) => (
+                                                                <MenuItem key={col} value={col}>{col}</MenuItem>
+                                                            ))}
+                                                        </Select>
+                                                    </FormControl>
+                                                </Box>
+                                            </Box>
+                                        )}
+
                                         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                                             <Box sx={{ flex: '1 1 45%', minWidth: 240 }}>
                                                 <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
@@ -839,6 +988,7 @@ export default function ValidationPage() {
                                                     </Select>
                                                 </FormControl>
                                             </Box>
+                                            {predictionMode === 'model' && (
                                             <Box sx={{ flex: '1 1 45%', minWidth: 240 }}>
                                                 <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
                                                     Target Column
@@ -866,6 +1016,7 @@ export default function ValidationPage() {
                                                     </Typography>
                                                 )}
                                             </Box>
+                                            )}
                                         </Box>
 
                                         <Box>

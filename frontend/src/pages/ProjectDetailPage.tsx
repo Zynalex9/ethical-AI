@@ -68,11 +68,13 @@ function FileUploadArea({
     onFileSelect,
     uploading,
     progress,
+    selectedFile,
 }: {
     accept: string;
     onFileSelect: (file: File) => void;
     uploading: boolean;
     progress: number;
+    selectedFile?: File | null;
 }) {
     const [dragOver, setDragOver] = useState(false);
 
@@ -117,18 +119,26 @@ function FileUploadArea({
             ) : (
                 <>
                     <UploadIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
-                    <Typography variant="h6" gutterBottom>
-                        Drag & drop file here
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" gutterBottom>
-                        or click to browse
-                    </Typography>
+                    {selectedFile ? (
+                        <Typography variant="body1" sx={{ mb: 1, fontWeight: 500 }}>
+                            {selectedFile.name}
+                        </Typography>
+                    ) : (
+                        <>
+                            <Typography variant="h6" gutterBottom>
+                                Drag & drop file here
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" gutterBottom>
+                                or click to browse
+                            </Typography>
+                        </>
+                    )}
                     <Button
                         variant="outlined"
                         component="label"
-                        sx={{ mt: 2 }}
+                        sx={{ mt: 1 }}
                     >
-                        Select File
+                        {selectedFile ? 'Change File' : 'Select File'}
                         <input
                             type="file"
                             hidden
@@ -136,6 +146,8 @@ function FileUploadArea({
                             onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) onFileSelect(file);
+                                // Reset so the same file can be re-selected after a validation error
+                                e.target.value = '';
                             }}
                         />
                     </Button>
@@ -156,6 +168,8 @@ export default function ProjectDetailPage() {
     const [benchmarkLoaderOpen, setBenchmarkLoaderOpen] = useState(false);
     const [modelName, setModelName] = useState('');
     const [datasetName, setDatasetName] = useState('');
+    const [pendingModelFile, setPendingModelFile] = useState<File | null>(null);
+    const [pendingDatasetFile, setPendingDatasetFile] = useState<File | null>(null);
     const [sensitiveAttrs, setSensitiveAttrs] = useState('');
     const [targetColumn, setTargetColumn] = useState('');
     const [uploading, setUploading] = useState(false);
@@ -266,6 +280,7 @@ export default function ProjectDetailPage() {
             queryClient.invalidateQueries({ queryKey: ['project', id] });
             setUploadModelOpen(false);
             setModelName('');
+            setPendingModelFile(null);
         } catch (err) {
             setError(getApiErrorMessage(err, 'Model upload failed'));
         } finally {
@@ -308,6 +323,7 @@ export default function ProjectDetailPage() {
             setDatasetName('');
             setSensitiveAttrs('');
             setTargetColumn('');
+            setPendingDatasetFile(null);
         } catch (err) {
             setError(getApiErrorMessage(err, 'Dataset upload failed'));
         } finally {
@@ -821,7 +837,12 @@ export default function ProjectDetailPage() {
             </TabPanel>
 
             {/* Upload Model Dialog */}
-            <Dialog open={uploadModelOpen} onClose={() => setUploadModelOpen(false)} maxWidth="sm" fullWidth>
+            <Dialog
+                open={uploadModelOpen}
+                onClose={() => { setUploadModelOpen(false); setPendingModelFile(null); setError(''); }}
+                maxWidth="sm"
+                fullWidth
+            >
                 <DialogTitle>Upload Model</DialogTitle>
                 <DialogContent>
                     {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -840,18 +861,31 @@ export default function ProjectDetailPage() {
 
                     <FileUploadArea
                         accept=".pkl,.joblib,.pickle,.h5,.keras,.pt,.pth,.onnx"
-                        onFileSelect={handleModelUpload}
+                        onFileSelect={(f) => { setError(''); setPendingModelFile(f); }}
                         uploading={uploading}
                         progress={uploadProgress}
+                        selectedFile={pendingModelFile}
                     />
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setUploadModelOpen(false)}>Cancel</Button>
+                    <Button onClick={() => { setUploadModelOpen(false); setPendingModelFile(null); setError(''); }}>Cancel</Button>
+                    <Button
+                        variant="contained"
+                        disabled={!pendingModelFile || uploading}
+                        onClick={() => pendingModelFile && handleModelUpload(pendingModelFile)}
+                    >
+                        Upload
+                    </Button>
                 </DialogActions>
             </Dialog>
 
             {/* Upload Dataset Dialog */}
-            <Dialog open={uploadDatasetOpen} onClose={() => setUploadDatasetOpen(false)} maxWidth="sm" fullWidth>
+            <Dialog
+                open={uploadDatasetOpen}
+                onClose={() => { setUploadDatasetOpen(false); setPendingDatasetFile(null); setError(''); }}
+                maxWidth="sm"
+                fullWidth
+            >
                 <DialogTitle>Upload Dataset</DialogTitle>
                 <DialogContent>
                     {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -890,13 +924,21 @@ export default function ProjectDetailPage() {
 
                     <FileUploadArea
                         accept=".csv"
-                        onFileSelect={handleDatasetUpload}
+                        onFileSelect={(f) => { setError(''); setPendingDatasetFile(f); }}
                         uploading={uploading}
                         progress={uploadProgress}
+                        selectedFile={pendingDatasetFile}
                     />
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setUploadDatasetOpen(false)}>Cancel</Button>
+                    <Button onClick={() => { setUploadDatasetOpen(false); setPendingDatasetFile(null); setError(''); }}>Cancel</Button>
+                    <Button
+                        variant="contained"
+                        disabled={!pendingDatasetFile || uploading}
+                        onClick={() => pendingDatasetFile && handleDatasetUpload(pendingDatasetFile)}
+                    >
+                        Upload
+                    </Button>
                 </DialogActions>
             </Dialog>
 
