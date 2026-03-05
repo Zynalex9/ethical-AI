@@ -1,4 +1,4 @@
-import { Box, Card, CardContent, Typography } from '@mui/material';
+import { Box, Card, CardContent, Typography, Alert } from '@mui/material';
 import {
     ResponsiveContainer,
     BarChart,
@@ -7,9 +7,6 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
-    ScatterChart,
-    Scatter,
-    ZAxis,
 } from 'recharts';
 
 interface GlobalImportanceItem {
@@ -36,69 +33,55 @@ interface SHAPVisualizationProps {
 
 export default function SHAPVisualization({ globalImportance, localExplanations }: SHAPVisualizationProps) {
     const topGlobal = globalImportance.slice(0, 10);
-
-    const summaryPoints = localExplanations.flatMap((row) =>
-        row.contributions.map((c) => ({
-            feature: c.feature,
-            shap: c.shap,
-            value: c.value,
-            sample: row.sample_index,
-        }))
-    );
-
     const firstLocal = localExplanations[0]?.contributions ?? [];
+    const hasGlobal = topGlobal.length > 0 && topGlobal.some(g => g.importance > 0);
+    const hasLocal = firstLocal.length > 0 && firstLocal.some(c => Math.abs(c.shap) > 1e-6);
 
     return (
-        <Box sx={{ display: 'grid', gap: 2 }}>
-            <Card>
-                <CardContent>
-                    <Typography variant="h6" sx={{ mb: 2 }}>Global Feature Importance (Top 10)</Typography>
-                    <Box sx={{ height: 320 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={topGlobal} margin={{ left: 10, right: 10, top: 10, bottom: 30 }}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="feature" angle={-25} textAnchor="end" height={60} />
-                                <YAxis />
-                                <Tooltip />
-                                <Bar dataKey="importance" fill="#3b82f6" />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </Box>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
+            {/* Global Feature Importance */}
+            <Card variant="outlined">
+                <CardContent sx={{ pb: '12px !important' }}>
+                    <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>Global Feature Importance</Typography>
+                    {hasGlobal ? (
+                        <Box sx={{ height: 220 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={topGlobal} margin={{ left: 0, right: 8, top: 4, bottom: 24 }}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="feature" angle={-20} textAnchor="end" height={50} tick={{ fontSize: 11 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip />
+                                    <Bar dataKey="importance" fill="#3b82f6" radius={[3, 3, 0, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </Box>
+                    ) : (
+                        <Alert severity="info" variant="outlined" sx={{ mt: 1 }}>No significant feature importance data available.</Alert>
+                    )}
                 </CardContent>
             </Card>
 
-            <Card>
-                <CardContent>
-                    <Typography variant="h6" sx={{ mb: 2 }}>Local Explanation (Sample {localExplanations[0]?.sample_index ?? '-'})</Typography>
-                    <Box sx={{ height: 320 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={firstLocal} layout="vertical" margin={{ left: 60, right: 10, top: 10, bottom: 10 }}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis type="number" />
-                                <YAxis dataKey="feature" type="category" width={160} />
-                                <Tooltip />
-                                <Bar dataKey="shap" fill="#14b8a6" />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </Box>
-                </CardContent>
-            </Card>
-
-            <Card>
-                <CardContent>
-                    <Typography variant="h6" sx={{ mb: 2 }}>SHAP Summary (scatter)</Typography>
-                    <Box sx={{ height: 360 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <ScatterChart margin={{ left: 20, right: 20, top: 20, bottom: 20 }}>
-                                <CartesianGrid />
-                                <XAxis type="number" dataKey="shap" name="SHAP" />
-                                <YAxis type="number" dataKey="sample" name="Sample" />
-                                <ZAxis type="number" dataKey="value" range={[20, 120]} name="Feature value" />
-                                <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                                <Scatter data={summaryPoints} fill="#3b82f6" />
-                            </ScatterChart>
-                        </ResponsiveContainer>
-                    </Box>
+            {/* Local Explanation */}
+            <Card variant="outlined">
+                <CardContent sx={{ pb: '12px !important' }}>
+                    <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
+                        Local SHAP (Sample {localExplanations[0]?.sample_index ?? '-'})
+                    </Typography>
+                    {hasLocal ? (
+                        <Box sx={{ height: 220 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={firstLocal.slice(0, 8)} layout="vertical" margin={{ left: 50, right: 8, top: 4, bottom: 4 }}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis type="number" tick={{ fontSize: 11 }} />
+                                    <YAxis dataKey="feature" type="category" width={120} tick={{ fontSize: 11 }} />
+                                    <Tooltip />
+                                    <Bar dataKey="shap" fill="#14b8a6" radius={[0, 3, 3, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </Box>
+                    ) : (
+                        <Alert severity="info" variant="outlined" sx={{ mt: 1 }}>No significant SHAP contributions for local samples.</Alert>
+                    )}
                 </CardContent>
             </Card>
         </Box>

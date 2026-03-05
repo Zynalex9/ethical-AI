@@ -24,6 +24,7 @@ import RequirementElicitationPage from './pages/RequirementElicitationPage';
 import TraceabilityPage from './pages/TraceabilityPage';
 import ReportViewerPage from './pages/ReportViewerPage';
 import AdminDashboardPage from './pages/AdminDashboardPage';
+import KnowledgeBasePage from './pages/KnowledgeBasePage';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -158,6 +159,7 @@ function AppRoutes() {
         <Route path="templates/manage" element={<TemplatesPage />} />
         <Route path="audit" element={<AuditLogPage />} />
         <Route path="admin" element={<AdminDashboardPage />} />
+        <Route path="knowledge-base" element={<KnowledgeBasePage />} />
         <Route path="profile" element={<PlaceholderPage title="Profile" />} />
         <Route path="settings" element={<PlaceholderPage title="Settings" />} />
       </Route>
