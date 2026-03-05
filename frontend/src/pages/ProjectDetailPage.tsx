@@ -27,6 +27,9 @@ import {
     DialogActions,
     TextField,
     LinearProgress,
+    Checkbox,
+    Tooltip,
+    Stack,
 } from '@mui/material';
 import {
     ArrowBack as BackIcon,
@@ -41,11 +44,14 @@ import {
     AccountTree as TraceIcon,
     ContentCopy as DuplicateIcon,
     Edit as EditIcon,
+    CompareArrows as CompareIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi, templatesApi, getApiErrorMessage } from '../services/api';
 import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
 import TraceabilityMatrix from '../components/TraceabilityMatrix';
+import ScheduleSettings from '../components/ScheduleSettings';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { Template } from '../types';
 
 interface TabPanelProps {
@@ -53,6 +59,124 @@ interface TabPanelProps {
     index: number;
     value: number;
 }
+
+// ---------------------------------------------------------------------------
+// Comparison Modal
+// ---------------------------------------------------------------------------
+type MetricDetail = { value: number | null; threshold: number | null; passed: boolean | null };
+type PrincipleMetrics = Record<string, MetricDetail>;
+
+function CompareModal({ open, onClose, runA, runB }: { open: boolean; onClose: () => void; runA: any; runB: any }) {
+    if (!runA || !runB) return null;
+
+    const principles: Array<{ key: 'fairness' | 'transparency' | 'privacy'; label: string }> = [
+        { key: 'fairness', label: 'Fairness' },
+        { key: 'transparency', label: 'Transparency' },
+        { key: 'privacy', label: 'Privacy' },
+    ];
+
+    const fmt = (v: number | null | undefined) => (v == null ? '\u2014' : Number(v).toFixed(4));
+
+    const deltaColor = (delta: number | null, mkey: string): string => {
+        if (delta == null) return 'text.primary';
+        const lowerBetter = ['difference', 'disparity'];
+        const goodDirection = lowerBetter.some((k) => mkey.includes(k)) ? delta < 0 : delta > 0;
+        if (delta === 0) return 'text.secondary';
+        return goodDirection ? 'success.main' : 'error.main';
+    };
+
+    return (
+        <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+            <DialogTitle>
+                Compare Validation Runs
+                <Typography variant="body2" color="text.secondary">
+                    Run A: {new Date(runA.started_at).toLocaleString()} &nbsp;·&nbsp;
+                    Run B: {new Date(runB.started_at).toLocaleString()}
+                </Typography>
+            </DialogTitle>
+            <DialogContent dividers>
+                {principles.map(({ key, label }) => {
+                    const metricsA: PrincipleMetrics = runA.validations?.[key]?.metrics || {};
+                    const metricsB: PrincipleMetrics = runB.validations?.[key]?.metrics || {};
+                    const allKeys = Array.from(new Set([...Object.keys(metricsA), ...Object.keys(metricsB)]));
+                    const eitherRun = runA.validations?.[key]?.completed || runB.validations?.[key]?.completed;
+                    if (!eitherRun) return null;
+                    return (
+                        <Box key={key} sx={{ mb: 4 }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1, textTransform: 'uppercase', letterSpacing: 1, color: 'primary.main' }}>
+                                {label}
+                            </Typography>
+                            {allKeys.length === 0 ? (
+                                <Typography variant="body2" color="text.secondary">No per-metric breakdown available.</Typography>
+                            ) : (
+                                <Table size="small">
+                                    <TableHead>
+                                        <TableRow sx={{ bgcolor: 'action.hover' }}>
+                                            <TableCell sx={{ fontWeight: 700 }}>Metric</TableCell>
+                                            <TableCell align="center" sx={{ fontWeight: 700 }}>Run A &nbsp;<Typography component="span" variant="caption" color="text.secondary">{new Date(runA.started_at).toLocaleDateString()}</Typography></TableCell>
+                                            <TableCell align="center" sx={{ fontWeight: 700 }}>Run B &nbsp;<Typography component="span" variant="caption" color="text.secondary">{new Date(runB.started_at).toLocaleDateString()}</Typography></TableCell>
+                                            <TableCell align="center" sx={{ fontWeight: 700 }}>Delta (B − A)</TableCell>
+                                        </TableRow>
+                                    </TableHead>
+                                    <TableBody>
+                                        {allKeys.map((mkey) => {
+                                            const a = metricsA[mkey];
+                                            const b = metricsB[mkey];
+                                            const delta = a?.value != null && b?.value != null ? b.value - a.value : null;
+                                            return (
+                                                <TableRow key={mkey} hover>
+                                                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+                                                        {mkey.replace(/_/g, ' ')}
+                                                    </TableCell>
+                                                    <TableCell align="center">
+                                                        {a ? (
+                                                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                                                                <Typography variant="body2">{fmt(a.value)}</Typography>
+                                                                <Chip label={a.passed ? 'PASS' : 'FAIL'} color={a.passed ? 'success' : 'error'} size="small" />
+                                                            </Box>
+                                                        ) : <Typography variant="body2" color="text.disabled">&mdash;</Typography>}
+                                                    </TableCell>
+                                                    <TableCell align="center">
+                                                        {b ? (
+                                                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                                                                <Typography variant="body2">{fmt(b.value)}</Typography>
+                                                                <Chip label={b.passed ? 'PASS' : 'FAIL'} color={b.passed ? 'success' : 'error'} size="small" />
+                                                            </Box>
+                                                        ) : <Typography variant="body2" color="text.disabled">&mdash;</Typography>}
+                                                    </TableCell>
+                                                    <TableCell align="center">
+                                                        <Typography variant="body2" sx={{ fontWeight: 700, color: deltaColor(delta, mkey) }}>
+                                                            {delta == null ? '\u2014' : `${delta > 0 ? '+' : ''}${delta.toFixed(4)}`}
+                                                        </Typography>
+                                                    </TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
+                                    </TableBody>
+                                </Table>
+                            )}
+                        </Box>
+                    );
+                })}
+                {/* Overall verdict */}
+                <Box sx={{ display: 'flex', gap: 4, mt: 1, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
+                    <Box>
+                        <Typography variant="caption" color="text.secondary">Run A Overall</Typography>
+                        <Box sx={{ mt: 0.5 }}><Chip label={runA.overall_passed ? 'PASSED' : 'FAILED'} color={runA.overall_passed ? 'success' : 'error'} /></Box>
+                    </Box>
+                    <Box>
+                        <Typography variant="caption" color="text.secondary">Run B Overall</Typography>
+                        <Box sx={{ mt: 0.5 }}><Chip label={runB.overall_passed ? 'PASSED' : 'FAILED'} color={runB.overall_passed ? 'success' : 'error'} /></Box>
+                    </Box>
+                </Box>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Close</Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+// ---------------------------------------------------------------------------
 
 function TabPanel({ children, value, index }: TabPanelProps) {
     return (
@@ -175,10 +299,12 @@ export default function ProjectDetailPage() {
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [error, setError] = useState('');
+    const [compareSelected, setCompareSelected] = useState<Set<string>>(new Set());
+    const [compareModalOpen, setCompareModalOpen] = useState(false);
 
-    const MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024;
+    const MAX_UPLOAD_SIZE_BYTES = 500 * 1024 * 1024;
     const MODEL_EXTENSIONS = new Set(['.pkl', '.joblib', '.pickle', '.h5', '.keras', '.pt', '.pth', '.onnx']);
-    const DATASET_EXTENSIONS = new Set(['.csv']);
+    const DATASET_EXTENSIONS = new Set(['.csv', '.xlsx', '.parquet']);
 
     const getFileExtension = (filename: string): string => {
         const dot = filename.lastIndexOf('.');
@@ -242,10 +368,11 @@ export default function ProjectDetailPage() {
         enabled: !!id && tab === 3,
     });
 
-    const { data: traceabilityData, isLoading: traceabilityLoading } = useQuery({
+    const { data: traceabilityData, isLoading: traceabilityLoading, error: traceabilityError, refetch: refetchTraceability } = useQuery({
         queryKey: ['traceability', id],
         queryFn: () => traceabilityApi.getMatrix(id!),
         enabled: !!id && tab === 4,
+        refetchOnMount: 'always',
     });
 
     // Upload model
@@ -267,7 +394,7 @@ export default function ProjectDetailPage() {
         }
 
         if (file.size > MAX_UPLOAD_SIZE_BYTES) {
-            setError('Model file exceeds 100 MB upload limit');
+            setError('Model file exceeds 500 MB upload limit');
             return;
         }
 
@@ -298,7 +425,7 @@ export default function ProjectDetailPage() {
 
         const ext = getFileExtension(file.name);
         if (!DATASET_EXTENSIONS.has(ext)) {
-            setError('Unsupported dataset format. Allowed: .csv');
+            setError('Unsupported dataset format. Allowed: .csv, .xlsx, .parquet');
             return;
         }
 
@@ -308,7 +435,7 @@ export default function ProjectDetailPage() {
         }
 
         if (file.size > MAX_UPLOAD_SIZE_BYTES) {
-            setError('Dataset file exceeds 100 MB upload limit');
+            setError('Dataset file exceeds 500 MB upload limit');
             return;
         }
 
@@ -702,6 +829,9 @@ export default function ProjectDetailPage() {
 
             {/* Validations Tab */}
             <TabPanel value={tab} index={3}>
+                {/* Scheduled Re-Validation Settings */}
+                {id && <ScheduleSettings projectId={id} />}
+
                 {validationsLoading ? (
                     <CircularProgress />
                 ) : validationHistory?.length === 0 ? (
@@ -724,20 +854,108 @@ export default function ProjectDetailPage() {
                 ) : (
                     <>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                            <Typography variant="h6">Validation History</Typography>
-                            <Button
-                                variant="contained"
-                                startIcon={<RunIcon />}
-                                onClick={() => navigate(`/projects/${id}/validate`)}
-                            >
-                                Run New Validation
-                            </Button>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                <Typography variant="h6">Validation History</Typography>
+                                {compareSelected.size > 0 && (
+                                    <Typography variant="caption" color="text.secondary">
+                                        {compareSelected.size} selected
+                                    </Typography>
+                                )}
+                            </Box>
+                            <Box sx={{ display: 'flex', gap: 1 }}>
+                                <Tooltip title={compareSelected.size !== 2 ? 'Select exactly 2 runs to compare' : ''}>
+                                    <span>
+                                        <Button
+                                            variant="outlined"
+                                            startIcon={<CompareIcon />}
+                                            disabled={compareSelected.size !== 2}
+                                            onClick={() => setCompareModalOpen(true)}
+                                        >
+                                            Compare ({compareSelected.size}/2)
+                                        </Button>
+                                    </span>
+                                </Tooltip>
+                                <Button
+                                    variant="contained"
+                                    startIcon={<RunIcon />}
+                                    onClick={() => navigate(`/projects/${id}/validate`)}
+                                >
+                                    Run New Validation
+                                </Button>
+                            </Box>
                         </Box>
+
+                        {/* Fairness Metrics Over Time Chart */}
+                        {(() => {
+                            const chartRuns = (validationHistory || [])
+                                .filter((v: any) => v.validations?.fairness?.completed && v.validations.fairness.metrics && Object.keys(v.validations.fairness.metrics).length > 0)
+                                .reverse(); // oldest first
+                            if (chartRuns.length < 2) {
+                                return (
+                                    <Card sx={{ mb: 3 }}>
+                                        <CardContent sx={{ textAlign: 'center', py: 3 }}>
+                                            <Typography variant="body2" color="text.secondary">
+                                                Run at least 2 validations with fairness metrics to see the trend chart.
+                                            </Typography>
+                                        </CardContent>
+                                    </Card>
+                                );
+                            }
+                            // Collect all metric keys across runs
+                            const metricKeys = new Set<string>();
+                            chartRuns.forEach((v: any) => {
+                                Object.keys(v.validations.fairness.metrics).forEach((k: string) => metricKeys.add(k));
+                            });
+                            const chartData = chartRuns.map((v: any) => {
+                                const point: Record<string, any> = { date: new Date(v.started_at).toLocaleDateString() };
+                                metricKeys.forEach((k) => {
+                                    const m = v.validations.fairness.metrics[k];
+                                    if (m) point[k] = Number(m.value);
+                                });
+                                return point;
+                            });
+                            const COLORS = ['#2e7d32', '#1565c0', '#e65100', '#6a1b9a', '#c62828', '#00838f'];
+                            return (
+                                <Card sx={{ mb: 3 }}>
+                                    <CardContent>
+                                        <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
+                                            Fairness Metrics Over Time
+                                        </Typography>
+                                        <ResponsiveContainer width="100%" height={280}>
+                                            <LineChart data={chartData}>
+                                                <CartesianGrid strokeDasharray="3 3" />
+                                                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                                                <YAxis tick={{ fontSize: 11 }} domain={[0, 'auto']} />
+                                                <RechartsTooltip />
+                                                <Legend />
+                                                {Array.from(metricKeys).map((key, idx) => (
+                                                    <Line
+                                                        key={key}
+                                                        type="monotone"
+                                                        dataKey={key}
+                                                        name={key.replace(/_/g, ' ')}
+                                                        stroke={COLORS[idx % COLORS.length]}
+                                                        strokeWidth={2}
+                                                        dot={{ r: 4 }}
+                                                        connectNulls
+                                                    />
+                                                ))}
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    </CardContent>
+                                </Card>
+                            );
+                        })()}
                         
                         <TableContainer component={Card}>
                             <Table>
                                 <TableHead>
                                     <TableRow>
+                                        <TableCell padding="checkbox">
+                                            <Tooltip title="Select to compare (max 2)">
+                                                <span><Checkbox disabled /></span>
+                                            </Tooltip>
+                                        </TableCell>
                                         <TableCell>Date</TableCell>
                                         <TableCell>Model</TableCell>
                                         <TableCell>Dataset</TableCell>
@@ -750,7 +968,25 @@ export default function ProjectDetailPage() {
                                 </TableHead>
                                 <TableBody>
                                     {validationHistory?.map((validation: any) => (
-                                        <TableRow key={validation.suite_id}>
+                                        <TableRow
+                                            key={validation.suite_id}
+                                            selected={compareSelected.has(validation.suite_id)}
+                                            sx={{ '&.Mui-selected': { bgcolor: 'action.selected' } }}
+                                        >
+                                            <TableCell padding="checkbox">
+                                                <Checkbox
+                                                    checked={compareSelected.has(validation.suite_id)}
+                                                    disabled={!compareSelected.has(validation.suite_id) && compareSelected.size >= 2}
+                                                    onChange={(e) => {
+                                                        setCompareSelected((prev) => {
+                                                            const next = new Set(prev);
+                                                            if (e.target.checked) next.add(validation.suite_id);
+                                                            else next.delete(validation.suite_id);
+                                                            return next;
+                                                        });
+                                                    }}
+                                                />
+                                            </TableCell>
                                             <TableCell>
                                                 {new Date(validation.started_at).toLocaleDateString()}
                                                 <br />
@@ -813,6 +1049,21 @@ export default function ProjectDetailPage() {
                                 </TableBody>
                             </Table>
                         </TableContainer>
+
+                        {/* Compare modal */}
+                        {(() => {
+                            const [idA, idB] = Array.from(compareSelected);
+                            const runA = validationHistory?.find((v: any) => v.suite_id === idA);
+                            const runB = validationHistory?.find((v: any) => v.suite_id === idB);
+                            return (
+                                <CompareModal
+                                    open={compareModalOpen}
+                                    onClose={() => setCompareModalOpen(false)}
+                                    runA={runA}
+                                    runB={runB}
+                                />
+                            );
+                        })()}
                     </>
                 )}
             </TabPanel>
@@ -821,14 +1072,28 @@ export default function ProjectDetailPage() {
             <TabPanel value={tab} index={4}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                     <Typography variant="h6">Requirement Traceability Matrix</Typography>
-                    <Button
-                        variant="outlined"
-                        startIcon={<TraceIcon />}
-                        onClick={() => navigate(`/projects/${id}/traceability`)}
-                    >
-                        Full Traceability View
-                    </Button>
+                    <Stack direction="row" spacing={1}>
+                        <Button
+                            variant="outlined"
+                            onClick={() => refetchTraceability()}
+                            disabled={traceabilityLoading}
+                        >
+                            Refresh
+                        </Button>
+                        <Button
+                            variant="outlined"
+                            startIcon={<TraceIcon />}
+                            onClick={() => navigate(`/projects/${id}/traceability`)}
+                        >
+                            Full Traceability View
+                        </Button>
+                    </Stack>
                 </Box>
+                {traceabilityError && (
+                    <Alert severity="error" sx={{ mb: 2 }}>
+                        Failed to load traceability data: {(traceabilityError as Error).message}
+                    </Alert>
+                )}
                 <TraceabilityMatrix
                     traces={traceabilityData?.traces || []}
                     loading={traceabilityLoading}
@@ -919,11 +1184,11 @@ export default function ProjectDetailPage() {
                     />
 
                     <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                        Supported format: CSV
+                        Supported formats: CSV, Excel (.xlsx), Parquet
                     </Typography>
 
                     <FileUploadArea
-                        accept=".csv"
+                        accept=".csv,.xlsx,.parquet"
                         onFileSelect={(f) => { setError(''); setPendingDatasetFile(f); }}
                         uploading={uploading}
                         progress={uploadProgress}

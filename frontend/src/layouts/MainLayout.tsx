@@ -32,10 +32,11 @@ import {
     Security as SecurityIcon,
     Logout as LogoutIcon,
     Person as PersonIcon,
-    AccountTree as TraceIcon,
     AdminPanelSettings as AdminIcon,
+    MenuBook as KnowledgeIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import NotificationBell from '../components/NotificationBell';
 
 const DRAWER_WIDTH = 260;
 
@@ -45,6 +46,7 @@ const menuItems = [
     { text: 'Validations', icon: AssessmentIcon, path: '/validations' },
     { text: 'Templates', icon: DescriptionIcon, path: '/templates' },
     { text: 'Audit Log', icon: HistoryIcon, path: '/audit' },
+    { text: 'Knowledge Base', icon: KnowledgeIcon, path: '/knowledge-base' },
     { text: 'Admin', icon: AdminIcon, path: '/admin', adminOnly: true },
 ];
 
@@ -205,6 +207,8 @@ export default function MainLayout() {
                     </IconButton>
 
                     <Box sx={{ flexGrow: 1 }} />
+
+                    <NotificationBell />
 
                     <IconButton
                         onClick={handleProfileMenuOpen}

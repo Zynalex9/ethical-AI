@@ -137,6 +137,48 @@ async def get_project_compliance_report_pdf(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/validation/{validation_suite_id}/html")
+async def get_validation_report_html(
+    validation_suite_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate and download an HTML validation report."""
+    await _verify_suite_access(db, validation_suite_id, current_user)
+    generator = ReportGenerator(db)
+    try:
+        html = await generator.generate_html_report(validation_suite_id)
+        filename = f"validation_report_{validation_suite_id}.html"
+        return Response(
+            content=html.encode("utf-8"),
+            media_type="text/html",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/validation/{validation_suite_id}/certificate")
+async def get_validation_certificate_pdf(
+    validation_suite_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate and download a compliance certificate PDF for a validation suite."""
+    await _verify_suite_access(db, validation_suite_id, current_user)
+    generator = ReportGenerator(db)
+    try:
+        pdf_bytes = await generator.generate_certificate_pdf(validation_suite_id)
+        filename = f"compliance_certificate_{validation_suite_id}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.post("/custom")
 async def generate_custom_report(
     body: CustomReportRequest,

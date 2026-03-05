@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Validation Report — {{ project_name }}</title>
+<style>
+  /* Reset & base */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; background: #f8fafc; padding: 2rem; }
+  a { color: #3b82f6; }
+
+  /* Print */
+  @media print {
+    body { background: #fff; padding: 0; }
+    .page-break { page-break-before: always; }
+    .no-print { display: none; }
+  }
+
+  /* Layout */
+  .container { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); overflow: hidden; }
+  .header { background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; padding: 2rem 2.5rem; }
+  .header h1 { font-size: 1.75rem; margin-bottom: .25rem; }
+  .header .meta { opacity: .85; font-size: .9rem; }
+  .badge { display: inline-block; padding: .25rem .75rem; border-radius: 9999px; font-weight: 600; font-size: .85rem; }
+  .badge-pass { background: #22c55e; color: #fff; }
+  .badge-fail { background: #ef4444; color: #fff; }
+  .badge-info { background: #3b82f6; color: #fff; }
+  .badge-warning { background: #f59e0b; color: #fff; }
+
+  section { padding: 1.5rem 2.5rem; border-bottom: 1px solid #e2e8f0; }
+  section:last-child { border-bottom: none; }
+  section h2 { font-size: 1.25rem; margin-bottom: .75rem; color: #334155; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
+  th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #e2e8f0; font-size: .9rem; }
+  th { background: #f1f5f9; font-weight: 600; }
+
+  /* Cards */
+  .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: .75rem; }
+
+  /* Lists */
+  ul.recs { list-style: disc inside; }
+  ul.recs li { margin-bottom: .25rem; }
+
+  .footer { text-align: center; padding: 1.5rem; font-size: .8rem; color: #94a3b8; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>Validation Report</h1>
+    <div class="meta">
+      {{ project_name }} &bull; {{ model_name }} &bull; {{ dataset_name }}
+      &bull; {{ validation_date }}
+    </div>
+    <div style="margin-top:.75rem;">
+      <span class="badge {{ 'badge-pass' if overall_passed else 'badge-fail' }}">
+        {{ 'PASS' if overall_passed else 'FAIL' }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Executive summary -->
+  <section>
+    <h2>Executive Summary</h2>
+    <p>{{ executive_summary }}</p>
+  </section>
+
+  <!-- Fairness -->
+  {% if fairness_results %}
+  <section>
+    <h2>Fairness Validation</h2>
+    <table>
+      <thead>
+        <tr><th>Metric</th><th>Value</th><th>Threshold</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for m in fairness_results %}
+        <tr>
+          <td>{{ m.metric_name }}</td>
+          <td>{{ "%.4f"|format(m.metric_value) if m.metric_value is not none else "N/A" }}</td>
+          <td>{{ "%.4f"|format(m.threshold) if m.threshold is not none else "—" }}</td>
+          <td><span class="badge {{ 'badge-pass' if m.passed else 'badge-fail' }}">{{ 'PASS' if m.passed else 'FAIL' }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  <!-- Transparency -->
+  {% if feature_importance %}
+  <section>
+    <h2>Transparency — Feature Importance (SHAP)</h2>
+    <table>
+      <thead><tr><th>Feature</th><th>Importance</th></tr></thead>
+      <tbody>
+        {% for feat, imp in feature_importance.items() %}
+        <tr><td>{{ feat }}</td><td>{{ "%.4f"|format(imp) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if explanation_fidelity is not none %}
+    <div class="card" style="margin-top:1rem;">
+      <strong>Explanation Fidelity:</strong> {{ "%.4f"|format(explanation_fidelity) }}
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <!-- Privacy -->
+  {% if privacy_report %}
+  <section>
+    <h2>Privacy Validation</h2>
+    {% if privacy_report.pii_results %}
+    <h3 style="font-size:1rem; margin-top:.5rem;">PII Detection</h3>
+    <table>
+      <thead><tr><th>Column</th><th>PII Type</th><th>Confidence</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for p in privacy_report.pii_results %}
+        {% if p.is_pii %}
+        <tr>
+          <td>{{ p.column_name }}</td>
+          <td>{{ p.pii_type }}</td>
+          <td>{{ "%.0f"|format(p.confidence * 100) }}%</td>
+          <td><span class="badge badge-fail">DETECTED</span></td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if privacy_report.k_anonymity %}
+    <div class="card" style="margin-top:1rem;">
+      <strong>k-Anonymity (k={{ privacy_report.k_anonymity.k_value }}):</strong>
+      <span class="badge {{ 'badge-pass' if privacy_report.k_anonymity.satisfies_k else 'badge-fail' }}">
+        {{ 'PASS' if privacy_report.k_anonymity.satisfies_k else 'FAIL' }}
+      </span>
+      — Actual min k = {{ privacy_report.k_anonymity.actual_min_k }}
+    </div>
+    {% endif %}
+
+    {% if privacy_report.l_diversity %}
+    <div class="card">
+      <strong>l-Diversity (l={{ privacy_report.l_diversity.l_value }}):</strong>
+      <span class="badge {{ 'badge-pass' if privacy_report.l_diversity.satisfies_l else 'badge-fail' }}">
+        {{ 'PASS' if privacy_report.l_diversity.satisfies_l else 'FAIL' }}
+      </span>
+    </div>
+    {% endif %}
+
+    {% if privacy_report.differential_privacy %}
+    <div class="card">
+      <strong>Differential Privacy:</strong>
+      ε = {{ "%.4f"|format(privacy_report.differential_privacy.measured_epsilon) }}
+      (target = {{ privacy_report.differential_privacy.target_epsilon }})
+      <span class="badge {{ 'badge-pass' if privacy_report.differential_privacy.budget_satisfied else 'badge-fail' }}">
+        {{ 'DP Budget: SATISFIED' if privacy_report.differential_privacy.budget_satisfied else 'DP Budget: EXCEEDED' }}
+      </span>
+    </div>
+    {% endif %}
+
+    {% if privacy_report.hipaa %}
+    <div class="card">
+      <strong>HIPAA Safe Harbor:</strong>
+      <span class="badge {{ 'badge-pass' if privacy_report.hipaa.overall_passed else 'badge-fail' }}">
+        {{ 'PASS' if privacy_report.hipaa.overall_passed else 'FAIL' }}
+      </span>
+      — {{ privacy_report.hipaa.passed_checks }}/{{ privacy_report.hipaa.total_checks }} checks passed
+    </div>
+    {% if not privacy_report.hipaa.overall_passed %}
+    <table style="margin-top:.5rem;">
+      <thead><tr><th>Identifier</th><th>Status</th><th>Flagged Columns</th></tr></thead>
+      <tbody>
+        {% for r in privacy_report.hipaa.results %}
+        {% if not r.passed %}
+        <tr>
+          <td>{{ r.label }}</td>
+          <td><span class="badge badge-fail">FAIL</span></td>
+          <td>{{ r.flagged_columns | join(', ') }}</td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <!-- Recommendations -->
+  {% if recommendations %}
+  <section>
+    <h2>Recommendations</h2>
+    <ul class="recs">
+      {% for r in recommendations %}
+      <li>{{ r }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <div class="footer">
+    Generated by EthicScan AI &bull; Suite {{ validation_suite_id }} &bull; {{ generated_at }}
+  </div>
+</div>
+</body>
+</html>

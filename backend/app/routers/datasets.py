@@ -26,7 +26,7 @@ from ..middleware.logging_config import get_logger
 logger = get_logger("routers.datasets")
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
-ALLOWED_DATASET_EXTENSIONS = {".csv"}
+ALLOWED_DATASET_EXTENSIONS = {".csv", ".xlsx", ".parquet"}
 
 
 # Pydantic models for responses
@@ -139,7 +139,21 @@ async def upload_dataset(
                 detail=f"Dataset file exceeds maximum size of {settings.max_upload_size_mb} MB"
             )
 
-        df = pd.read_csv(file_path)
+        # ── Parse dataset based on file extension ──────────────────────
+        if ext == ".xlsx":
+            df = pd.read_excel(file_path)
+        elif ext == ".parquet":
+            df = pd.read_parquet(file_path)
+        else:
+            df = pd.read_csv(file_path)
+
+        # If original was not CSV, convert to CSV for uniform downstream use
+        if ext in (".xlsx", ".parquet"):
+            csv_path = file_path.with_suffix(".csv")
+            df.to_csv(csv_path, index=False)
+            file_path.unlink(missing_ok=True)  # remove original
+            file_path = csv_path
+
         row_count = len(df)
         column_count = len(df.columns)
         columns = df.columns.tolist()
@@ -163,7 +177,7 @@ async def upload_dataset(
     except Exception as e:
         if file_path.exists():
             file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse dataset: {str(e)}")
     
     # Parse sensitive attributes
     sensitive_list = []

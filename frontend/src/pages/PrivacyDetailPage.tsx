@@ -26,7 +26,9 @@ import {
     Lock as LockIcon,
     CheckCircle as CheckIcon,
     Error as ErrorIcon,
-    Warning as WarningIcon
+    Warning as WarningIcon,
+    Shield as ShieldIcon,
+    Fingerprint as FingerprintIcon,
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { validationApi } from '../services/api';
@@ -289,6 +291,146 @@ export default function PrivacyDetailPage() {
                                 Groups with only 1 distinct value in this column can be used to infer sensitive information
                             </Typography>
                         </Alert>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Differential Privacy Section */}
+            {privacyData.differential_privacy && (
+                <Card sx={{ mb: 3 }}>
+                    <CardContent>
+                        <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {privacyData.differential_privacy.budget_satisfied ? <CheckIcon color="success" /> : <ErrorIcon color="error" />}
+                            <FingerprintIcon />
+                            Differential Privacy (ε)
+                        </Typography>
+
+                        <Box sx={{ mb: 2 }}>
+                            <Chip
+                                label={privacyData.differential_privacy.budget_satisfied ? 'BUDGET SATISFIED' : 'BUDGET EXCEEDED'}
+                                color={privacyData.differential_privacy.budget_satisfied ? 'success' : 'error'}
+                                sx={{ mr: 2 }}
+                            />
+                            {privacyData.differential_privacy.noise_applied && (
+                                <Chip label="Noise Applied" color="info" variant="outlined" size="small" />
+                            )}
+                        </Box>
+
+                        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2, mb: 2 }}>
+                            <Paper variant="outlined" sx={{ p: 2 }}>
+                                <Typography variant="caption" color="text.secondary">Measured ε</Typography>
+                                <Typography variant="h5">{privacyData.differential_privacy.measured_epsilon?.toFixed(4)}</Typography>
+                            </Paper>
+                            <Paper variant="outlined" sx={{ p: 2 }}>
+                                <Typography variant="caption" color="text.secondary">Target ε</Typography>
+                                <Typography variant="h5">{privacyData.differential_privacy.target_epsilon}</Typography>
+                            </Paper>
+                            <Paper variant="outlined" sx={{ p: 2 }}>
+                                <Typography variant="caption" color="text.secondary">
+                                    {privacyData.differential_privacy.noise_applied ? 'Post-Noise ε' : 'Status'}
+                                </Typography>
+                                <Typography variant="h5" color={privacyData.differential_privacy.budget_satisfied ? 'success.main' : 'error.main'}>
+                                    {privacyData.differential_privacy.noise_applied
+                                        ? privacyData.differential_privacy.noised_epsilon?.toFixed(4)
+                                        : privacyData.differential_privacy.budget_satisfied ? '✓' : '✗'}
+                                </Typography>
+                            </Paper>
+                        </Box>
+
+                        {privacyData.differential_privacy.sensitivities && Object.keys(privacyData.differential_privacy.sensitivities).length > 0 && (
+                            <>
+                                <Typography variant="subtitle2" sx={{ mb: 1 }}>Column Sensitivities</Typography>
+                                <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 300 }}>
+                                    <Table size="small">
+                                        <TableHead>
+                                            <TableRow>
+                                                <TableCell>Column</TableCell>
+                                                <TableCell align="right">Sensitivity</TableCell>
+                                            </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                            {Object.entries(privacyData.differential_privacy.sensitivities).map(([col, val]) => (
+                                                <TableRow key={col}>
+                                                    <TableCell>{col}</TableCell>
+                                                    <TableCell align="right">{Number(val).toFixed(4)}</TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </TableContainer>
+                            </>
+                        )}
+
+                        {privacyData.differential_privacy.details?.length > 0 && (
+                            <Box sx={{ mt: 2 }}>
+                                {privacyData.differential_privacy.details.map((d: string, idx: number) => (
+                                    <Alert key={idx} severity="info" sx={{ mb: 0.5 }}>{d}</Alert>
+                                ))}
+                            </Box>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* HIPAA Safe Harbor Section */}
+            {privacyData.hipaa && (
+                <Card sx={{ mb: 3 }}>
+                    <CardContent>
+                        <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {privacyData.hipaa.overall_passed ? <CheckIcon color="success" /> : <ErrorIcon color="error" />}
+                            <ShieldIcon />
+                            HIPAA Safe Harbor De-Identification
+                        </Typography>
+
+                        <Box sx={{ mb: 2 }}>
+                            <Chip
+                                label={privacyData.hipaa.overall_passed ? 'COMPLIANT' : 'NON-COMPLIANT'}
+                                color={privacyData.hipaa.overall_passed ? 'success' : 'error'}
+                                sx={{ mr: 2 }}
+                            />
+                            <Typography variant="body2" component="span" color="text.secondary">
+                                {privacyData.hipaa.passed_checks} / {privacyData.hipaa.total_checks} checks passed
+                            </Typography>
+                        </Box>
+
+                        <TableContainer component={Paper} variant="outlined">
+                            <Table size="small">
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>Identifier</TableCell>
+                                        <TableCell>Status</TableCell>
+                                        <TableCell>Flagged Columns</TableCell>
+                                        <TableCell>Detail</TableCell>
+                                    </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                    {privacyData.hipaa.results?.map((r: any, idx: number) => (
+                                        <TableRow key={idx} sx={{ bgcolor: r.passed ? 'transparent' : 'error.900' }}>
+                                            <TableCell sx={{ textTransform: 'capitalize' }}>
+                                                {r.identifier?.replace(/_/g, ' ')}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Chip
+                                                    label={r.passed ? 'Pass' : 'Fail'}
+                                                    color={r.passed ? 'success' : 'error'}
+                                                    size="small"
+                                                />
+                                            </TableCell>
+                                            <TableCell>
+                                                {r.columns_flagged?.length > 0
+                                                    ? r.columns_flagged.map((c: string) => (
+                                                        <Chip key={c} label={c} size="small" variant="outlined" sx={{ mr: 0.5, mb: 0.5 }} />
+                                                    ))
+                                                    : '—'}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Typography variant="caption">{r.detail}</Typography>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
                     </CardContent>
                 </Card>
             )}

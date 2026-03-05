@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     
     # File Storage
     upload_dir: str = "./uploads"
-    max_upload_size_mb: int = 100
+    max_upload_size_mb: int = 500
     allowed_model_extensions: List[str] = [".pkl", ".joblib", ".pickle", ".h5", ".keras", ".pt", ".pth", ".onnx"]
-    allowed_dataset_extensions: List[str] = [".csv"]
+    allowed_dataset_extensions: List[str] = [".csv", ".xlsx", ".parquet"]
     
     # MLflow - Use absolute path to avoid working directory issues between Celery and FastAPI
     mlflow_tracking_uri: str = "sqlite:///./mlflow.db"

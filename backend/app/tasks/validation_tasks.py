@@ -725,6 +725,38 @@ async def _run_transparency_validation_async(
         else:
             logger.warning("⚠️ No sample predictions were generated")
         
+        # ── LIME local explanations + Explanation Fidelity ────────────
+        lime_explanations_serialized = []
+        explanation_fidelity = None
+        try:
+            logger.info("🍋 Computing LIME local explanations...")
+            lime_explanations = engine.explain_local_lime(X_sample, instance_indices=sample_indices)
+            for lime_exp in lime_explanations:
+                idx = lime_exp.instance_index
+                lime_explanations_serialized.append({
+                    "sample_index": int(idx),
+                    "predicted_label": int(lime_exp.prediction),
+                    "prediction_probability": float(lime_exp.prediction_probability),
+                    "feature_contributions": {
+                        k: float(v) for k, v in lime_exp.feature_contributions.items()
+                    },
+                    "explanation_type": "lime"
+                })
+            logger.info(f"✅ Generated {len(lime_explanations_serialized)} LIME explanations")
+
+            # Compute explanation fidelity: 1 − mean(|f(x) − g(x)|)
+            logger.info("📐 Computing explanation fidelity...")
+            explanation_fidelity = engine.compute_explanation_fidelity(
+                X_sample, instance_indices=sample_indices
+            )
+            logger.info(f"✅ Explanation fidelity = {explanation_fidelity:.4f}")
+
+            # Save LIME artifacts to MLflow
+            tracker.log_dict({"lime_explanations": lime_explanations_serialized}, "lime_explanations.json")
+            tracker.log_metrics({"explanation_fidelity": explanation_fidelity})
+        except Exception as e:
+            logger.warning(f"⚠️ LIME / fidelity computation failed (non-fatal): {e}", exc_info=True)
+
         if progress_callback:
             progress_callback(90, "Saving results")
         validation.progress = 90
@@ -760,6 +792,9 @@ async def _run_transparency_validation_async(
             "status": "completed",
             "global_importance": importance_dict,
             "model_card": model_card,
+            "sample_predictions": sample_predictions,
+            "lime_explanations": lime_explanations_serialized,
+            "explanation_fidelity": explanation_fidelity,
             "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
         }
         
@@ -787,7 +822,10 @@ async def _run_privacy_validation_async(
     sensitive_attribute: Optional[str] = None,
     selected_checks: Optional[list] = None,
     user_id: Optional[str] = None,
-    progress_callback=None
+    progress_callback=None,
+    # Differential Privacy parameters
+    dp_target_epsilon: float = 1.0,
+    dp_apply_noise: bool = False,
 ) -> Dict[str, Any]:
     """Core privacy validation logic (async)."""
     try:
@@ -869,7 +907,7 @@ async def _run_privacy_validation_async(
                 'sensitive_attribute': sensitive_attribute
             }
 
-        if not requirements:
+        if not requirements and 'differential_privacy' not in checks and 'hipaa' not in checks:
             raise ValueError("No supported privacy checks selected")
         
         if progress_callback:
@@ -877,8 +915,51 @@ async def _run_privacy_validation_async(
         validation.progress = 70
         await db.commit()
         
-        # Run validation
-        report = validator.validate(requirements)
+        # Run core validation (PII / k-anonymity / l-diversity)
+        if requirements:
+            report = validator.validate(requirements)
+        else:
+            # No core checks selected, build an empty report
+            from app.validators.privacy_validator import PrivacyReport
+            report = PrivacyReport(
+                pii_results=[], k_anonymity=None, l_diversity=None,
+                overall_passed=True, recommendations=[]
+            )
+
+        # ── Differential Privacy check (opt-in) ──────────────────────
+        dp_result = None
+        if 'differential_privacy' in checks:
+            from app.validators.differential_privacy import DifferentialPrivacyChecker
+            if not quasi_identifiers:
+                raise ValueError("differential_privacy selected but quasi_identifiers were not provided")
+            dp_checker = DifferentialPrivacyChecker(df)
+            dp_result = dp_checker.check(
+                quasi_identifiers=quasi_identifiers,
+                target_epsilon=dp_target_epsilon,
+                apply_noise=dp_apply_noise,
+            )
+            if not dp_result.budget_satisfied:
+                report.overall_passed = False
+                report.recommendations.append(
+                    f"Differential Privacy budget EXCEEDED (ε={dp_result.measured_epsilon:.4f}, target={dp_target_epsilon}). "
+                    "Consider applying Laplace noise or reducing quasi-identifier resolution."
+                )
+            logger.info("DP check completed: ε=%.4f satisfied=%s", dp_result.measured_epsilon, dp_result.budget_satisfied)
+
+        # ── HIPAA Safe Harbor check (opt-in) ──────────────────────────
+        hipaa_result = None
+        if 'hipaa' in checks:
+            from app.validators.hipaa_checker import HIPAAChecker
+            hipaa_checker = HIPAAChecker(df)
+            hipaa_result = hipaa_checker.check()
+            if not hipaa_result.overall_passed:
+                report.overall_passed = False
+                failed_ids = [r.label for r in hipaa_result.results if not r.passed]
+                report.recommendations.append(
+                    f"HIPAA Safe Harbor check FAILED for: {', '.join(failed_ids)}. "
+                    "Remove or de-identify flagged columns before deployment."
+                )
+            logger.info("HIPAA check completed: %d/%d passed", hipaa_result.passed_checks, hipaa_result.total_checks)
         
         # Log to MLflow
         metrics = {
@@ -889,9 +970,21 @@ async def _run_privacy_validation_async(
             metrics["k_anonymity_satisfied"] = 1.0 if report.k_anonymity.satisfies_k else 0.0
         if report.l_diversity:
             metrics["l_diversity_satisfied"] = 1.0 if report.l_diversity.satisfies_l else 0.0
+        if dp_result:
+            metrics["dp_measured_epsilon"] = dp_result.measured_epsilon
+            metrics["dp_budget_satisfied"] = 1.0 if dp_result.budget_satisfied else 0.0
+        if hipaa_result:
+            metrics["hipaa_passed"] = 1.0 if hipaa_result.overall_passed else 0.0
+            metrics["hipaa_checks_passed"] = float(hipaa_result.passed_checks)
         
+        report_dict = report.to_dict()
+        if dp_result:
+            report_dict["differential_privacy"] = dp_result.to_dict()
+        if hipaa_result:
+            report_dict["hipaa"] = hipaa_result.to_dict()
+
         tracker.log_metrics(metrics)
-        tracker.log_dict(report.to_dict(), "privacy_report.json")
+        tracker.log_dict(report_dict, "privacy_report.json")
         
         if progress_callback:
             progress_callback(90, "Saving results")
@@ -935,6 +1028,8 @@ async def _run_privacy_validation_async(
             "pii_detected": pii_list,
             "k_anonymity": report.k_anonymity.to_dict() if report.k_anonymity else None,
             "l_diversity": report.l_diversity.to_dict() if report.l_diversity else None,
+            "differential_privacy": dp_result.to_dict() if dp_result else None,
+            "hipaa": hipaa_result.to_dict() if hipaa_result else None,
             "recommendations": report.recommendations,
             "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
         }
@@ -1001,7 +1096,9 @@ def run_privacy_validation_task(
     quasi_identifiers: Optional[list] = None,
     sensitive_attribute: Optional[str] = None,
     selected_checks: Optional[list] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    dp_target_epsilon: float = 1.0,
+    dp_apply_noise: bool = False,
 ) -> Dict[str, Any]:
     """Run privacy validation in background."""
     import asyncio
@@ -1021,7 +1118,9 @@ def run_privacy_validation_task(
                 sensitive_attribute=sensitive_attribute,
                 selected_checks=selected_checks,
                 user_id=user_id,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                dp_target_epsilon=dp_target_epsilon,
+                dp_apply_noise=dp_apply_noise,
             )
     
     # Run async function using asyncio event loop
@@ -1267,6 +1366,13 @@ def run_all_validations_task(
 
                 results["overall_passed"] = overall_passed
                 results["status"] = "completed"
+
+                # ── Trigger metric regression check ───────────────────
+                try:
+                    from app.tasks.scheduled_tasks import check_metric_regression
+                    check_metric_regression.delay(str(suite.id))
+                except Exception as _reg_err:
+                    logger.warning("Failed to queue regression check: %s", _reg_err)
 
                 self.update_state(state="PROGRESS", meta={"progress": 100, "step": "Complete"})
                 return results

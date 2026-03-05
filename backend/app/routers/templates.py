@@ -403,7 +403,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
             "reference": "Title VI of Civil Rights Act",
             "items": [
                 {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.75, "principle": "fairness", "description": "Demographic parity ≥ 0.75"},
-                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.10, "principle": "fairness", "description": "Equal opportunity difference ≤ 0.10"},
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Equal opportunity difference ≤ 0.05"},
                 {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Explanation required for rejections"},
             ],
         },

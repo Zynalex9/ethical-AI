@@ -216,6 +216,8 @@ export const validationApi = {
             l_diversity_l?: number;
             quasi_identifiers?: string[];
             sensitive_attribute?: string;
+            dp_target_epsilon?: number;
+            dp_apply_noise?: boolean;
         };
         requirement_ids?: string[];
     }) => {
@@ -463,6 +465,13 @@ export const reportsApi = {
         return response.data as Blob;
     },
 
+    downloadCertificatePdf: async (suiteId: string) => {
+        const response = await api.get(`/reports/validation/${suiteId}/certificate`, {
+            responseType: 'blob',
+        });
+        return response.data as Blob;
+    },
+
     getComplianceReport: async (projectId: string) => {
         const response = await api.get(`/reports/project/${projectId}/compliance`);
         return response.data;
@@ -481,6 +490,72 @@ export const reportsApi = {
         date_range?: Record<string, string>;
     }) => {
         const response = await api.post('/reports/custom', data);
+        return response.data;
+    },
+
+    downloadValidationHtml: async (suiteId: string) => {
+        const response = await api.get(`/reports/validation/${suiteId}/html`, {
+            responseType: 'blob',
+        });
+        return response.data as Blob;
+    },
+};
+
+// Notifications API – Phase 3
+export const notificationsApi = {
+    list: async (unreadOnly = false) => {
+        const response = await api.get('/notifications', { params: { unread_only: unreadOnly } });
+        return response.data;
+    },
+
+    markRead: async (ids: string[]) => {
+        const response = await api.post('/notifications/mark-read', { notification_ids: ids });
+        return response.data;
+    },
+
+    markAllRead: async () => {
+        const response = await api.post('/notifications/mark-all-read');
+        return response.data;
+    },
+};
+
+// Scheduled Validations API – Phase 3
+export const scheduledValidationApi = {
+    get: async (projectId: string) => {
+        const response = await api.get(`/scheduled-validations/${projectId}`);
+        return response.data;
+    },
+
+    create: async (data: { project_id: string; frequency: string; last_config?: Record<string, any> }) => {
+        const response = await api.post('/scheduled-validations', data);
+        return response.data;
+    },
+
+    update: async (projectId: string, data: { enabled?: boolean; frequency?: string }) => {
+        const response = await api.put(`/scheduled-validations/${projectId}`, data);
+        return response.data;
+    },
+
+    delete: async (projectId: string) => {
+        const response = await api.delete(`/scheduled-validations/${projectId}`);
+        return response.data;
+    },
+};
+
+// Remediation API – Phase 3
+export const remediationApi = {
+    getChecklists: async (suiteId: string) => {
+        const response = await api.get(`/remediation/${suiteId}`);
+        return response.data;
+    },
+
+    generate: async (suiteId: string, principles?: string[]) => {
+        const response = await api.post(`/remediation/${suiteId}/generate`, principles || null);
+        return response.data;
+    },
+
+    updateStep: async (checklistId: string, stepId: string, done: boolean) => {
+        const response = await api.put(`/remediation/${checklistId}/step`, { step_id: stepId, done });
         return response.data;
     },
 };

@@ -86,6 +86,9 @@ class PrivacyValidationRequest(BaseModel):
     quasi_identifiers: Optional[List[str]] = None
     sensitive_attribute: Optional[str] = None
     selected_checks: Optional[List[str]] = None
+    # Differential Privacy config
+    dp_target_epsilon: Optional[float] = 1.0
+    dp_apply_noise: Optional[bool] = False
 
 
 class ValidationStatusResponse(BaseModel):
@@ -808,17 +811,32 @@ async def get_validation_history(
                 "fairness": {
                     "completed": suite.fairness_validation_id is not None,
                     "metrics_count": len(fairness_results),
-                    "passed_count": sum(1 for r in fairness_results if r.passed)
+                    "passed_count": sum(1 for r in fairness_results if r.passed),
+                    "metrics": {
+                        r.metric_name: {"value": r.metric_value, "threshold": r.threshold, "passed": r.passed}
+                        for r in fairness_results
+                        if r.metric_name and r.metric_value is not None
+                    },
                 },
                 "transparency": {
                     "completed": suite.transparency_validation_id is not None,
                     "metrics_count": len(transparency_results),
-                    "passed_count": sum(1 for r in transparency_results if r.passed)
+                    "passed_count": sum(1 for r in transparency_results if r.passed),
+                    "metrics": {
+                        r.metric_name: {"value": r.metric_value, "threshold": r.threshold, "passed": r.passed}
+                        for r in transparency_results
+                        if r.metric_name and r.metric_value is not None
+                    },
                 },
                 "privacy": {
                     "completed": suite.privacy_validation_id is not None,
                     "metrics_count": len(privacy_results),
-                    "passed_count": sum(1 for r in privacy_results if r.passed)
+                    "passed_count": sum(1 for r in privacy_results if r.passed),
+                    "metrics": {
+                        r.metric_name: {"value": r.metric_value, "threshold": r.threshold, "passed": r.passed}
+                        for r in privacy_results
+                        if r.metric_name and r.metric_value is not None
+                    },
                 }
             }
         })
@@ -1090,13 +1108,34 @@ async def get_suite_results(
         )
         transparency_val = result.scalar_one_or_none()
         if transparency_val:
-            response["validations"]["transparency"] = {
+            # The Celery task stores full transparency data in its result dict.
+            # Retrieve the task result to get global_importance, lime, fidelity, etc.
+            transparency_data: Dict[str, Any] = {
                 "validation_id": str(transparency_val.id),
                 "status": transparency_val.status if isinstance(transparency_val.status, str) else transparency_val.status.value,
                 "progress": transparency_val.progress,
                 "mlflow_run_id": transparency_val.mlflow_run_id,
-                "completed_at": transparency_val.completed_at.isoformat() if transparency_val.completed_at else None
+                "completed_at": transparency_val.completed_at.isoformat() if transparency_val.completed_at else None,
             }
+
+            # Try to recover the rich transparency payload from the Celery result
+            if suite.celery_task_id:
+                try:
+                    from celery.result import AsyncResult
+                    from ..celery_app import celery_app as _celery
+                    task_result = AsyncResult(suite.celery_task_id, app=_celery)
+                    if task_result.state == "SUCCESS" and task_result.result:
+                        t_vals = task_result.result.get("validations", {}).get("transparency", {})
+                        if t_vals:
+                            transparency_data["global_importance"] = t_vals.get("global_importance")
+                            transparency_data["model_card"] = t_vals.get("model_card")
+                            transparency_data["sample_predictions"] = t_vals.get("sample_predictions")
+                            transparency_data["lime_explanations"] = t_vals.get("lime_explanations")
+                            transparency_data["explanation_fidelity"] = t_vals.get("explanation_fidelity")
+                except Exception:
+                    pass  # Non-fatal – basic data still returned
+
+            response["validations"]["transparency"] = transparency_data
     
     # Get privacy validation
     if suite.privacy_validation_id:

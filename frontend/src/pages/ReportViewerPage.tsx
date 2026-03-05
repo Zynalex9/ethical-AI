@@ -16,12 +16,13 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DownloadIcon from '@mui/icons-material/Download';
 import AssessmentIcon from '@mui/icons-material/Assessment';
-import { reportsApi } from '../services/api';
+import { reportsApi, traceabilityApi } from '../services/api';
 import SHAPVisualization from '../components/visualizations/SHAPVisualization';
 import LIMEVisualization from '../components/visualizations/LIMEVisualization';
 import FairnessVisualization from '../components/visualizations/FairnessVisualization';
 import PrivacyVisualization from '../components/visualizations/PrivacyVisualization';
 import TraceabilityMatrix from '../components/TraceabilityMatrix';
+import RemediationPanel from '../components/RemediationPanel';
 import { exportReportToPDF } from '../services/pdf-export';
 
 function TabPanel({ value, index, children }: { value: number; index: number; children: React.ReactNode }) {
@@ -41,6 +42,14 @@ export default function ReportViewerPage() {
         queryKey: ['validationReport', suiteId],
         queryFn: () => reportsApi.getValidationReport(suiteId!),
         enabled: !!suiteId,
+    });
+
+    // Fetch traceability matrix for this report's project
+    const projectId = data?.project_id;
+    const { data: traceabilityData } = useQuery({
+        queryKey: ['traceability-matrix', projectId],
+        queryFn: () => traceabilityApi.getMatrix(projectId),
+        enabled: !!projectId,
     });
 
     const fairnessMetrics = useMemo(() => {
@@ -118,6 +127,18 @@ export default function ReportViewerPage() {
         URL.revokeObjectURL(url);
     };
 
+    const handleDownloadHtml = async () => {
+        try {
+            const blob = await reportsApi.downloadValidationHtml(suiteId!);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `validation_report_${suiteId}.html`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch { /* silent */ }
+    };
+
     if (isLoading) {
         return (
             <Box sx={{ p: 4, display: 'flex', justifyContent: 'center' }}>
@@ -148,7 +169,19 @@ export default function ReportViewerPage() {
                     <Chip icon={<AssessmentIcon />} label={String(data.overall_status || '').toUpperCase()} color={data.overall_passed ? 'success' : 'error'} />
                     <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownloadBackendPdf}>Download PDF (API)</Button>
                     <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownloadFrontendPdf}>Download PDF (UI)</Button>
+                    <Button variant="outlined" startIcon={<DownloadIcon />} onClick={async () => {
+                        try {
+                            const blob = await reportsApi.downloadCertificatePdf(suiteId!);
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `compliance_certificate_${suiteId}.pdf`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                        } catch { /* silent */ }
+                    }}>Download Certificate</Button>
                     <Button variant="outlined" onClick={handleExportJson}>Export JSON</Button>
+                    <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownloadHtml}>Download HTML</Button>
                 </Box>
             </Box>
 
@@ -172,6 +205,7 @@ export default function ReportViewerPage() {
                 <Tab label="Transparency" />
                 <Tab label="Privacy" />
                 <Tab label="Traceability" />
+                <Tab label="Remediation" />
             </Tabs>
 
             <TabPanel value={tab} index={0}>
@@ -196,8 +230,8 @@ export default function ReportViewerPage() {
 
             <TabPanel value={tab} index={3}>
                 <TraceabilityMatrix
-                    traces={[]}
-                    summary={{
+                    traces={traceabilityData?.traces ?? []}
+                    summary={traceabilityData?.summary ?? {
                         total_requirements: 0,
                         total_validations: 0,
                         pass_count: 0,
@@ -206,6 +240,10 @@ export default function ReportViewerPage() {
                         pass_rate: 0,
                     }}
                 />
+            </TabPanel>
+
+            <TabPanel value={tab} index={4}>
+                {suiteId && <RemediationPanel suiteId={suiteId} />}
             </TabPanel>
         </Box>
     );

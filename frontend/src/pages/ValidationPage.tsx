@@ -136,7 +136,7 @@ const FAIRNESS_METRICS = [
     { key: 'demographic_parity_difference', label: 'Demographic Parity Difference', defaultThreshold: 0.1 },
     { key: 'equalized_odds_ratio', label: 'Equalized Odds Ratio', defaultThreshold: 0.8 },
     { key: 'equalized_odds_difference', label: 'Equalized Odds Difference', defaultThreshold: 0.1 },
-    { key: 'equal_opportunity_difference', label: 'Equal Opportunity Difference', defaultThreshold: 0.1 },
+    { key: 'equal_opportunity_difference', label: 'Equal Opportunity Difference', defaultThreshold: 0.05 },
     { key: 'disparate_impact_ratio', label: 'Disparate Impact Ratio', defaultThreshold: 0.8 },
 ];
 
@@ -151,7 +151,7 @@ const DEFAULT_FAIRNESS_THRESHOLDS: Record<string, number> = {
     demographic_parity_difference: 0.1,
     equalized_odds_ratio: 0.8,
     equalized_odds_difference: 0.1,
-    equal_opportunity_difference: 0.1,
+    equal_opportunity_difference: 0.05,
     disparate_impact_ratio: 0.8,
 };
 
@@ -159,6 +159,8 @@ const PRIVACY_CHECKS = [
     { key: 'pii_detection', label: 'PII Detection' },
     { key: 'k_anonymity', label: 'k-Anonymity' },
     { key: 'l_diversity', label: 'l-Diversity' },
+    { key: 'differential_privacy', label: 'Differential Privacy (ε)' },
+    { key: 'hipaa', label: 'HIPAA Safe Harbor' },
 ];
 
 const DEFAULT_PRIVACY_CHECKS = ['pii_detection', 'k_anonymity'];
@@ -195,6 +197,8 @@ export default function ValidationPage() {
     const [selectedPrivacyChecks, setSelectedPrivacyChecks] = useState<string[]>(DEFAULT_PRIVACY_CHECKS);
     const [kAnonymityK, setKAnonymityK] = useState<number>(5);
     const [lDiversityL, setLDiversityL] = useState<number>(2);
+    const [dpTargetEpsilon, setDpTargetEpsilon] = useState<number>(1.0);
+    const [dpApplyNoise, setDpApplyNoise] = useState<boolean>(false);
     const [formError, setFormError] = useState('');
 
     // Dataset-predictions mode (fairness without uploading a model)
@@ -515,6 +519,8 @@ export default function ValidationPage() {
                     l_diversity_l: lDiversityL,
                     quasi_identifiers: quasiIdentifiers.length > 0 ? quasiIdentifiers : undefined,
                     sensitive_attribute: sensitiveAttribute || undefined,
+                    dp_target_epsilon: dpTargetEpsilon,
+                    dp_apply_noise: dpApplyNoise,
                 },
                 requirement_ids: selectedRequirements.length > 0 ? selectedRequirements : undefined,
             });
@@ -1181,6 +1187,35 @@ export default function ValidationPage() {
                                                 </Box>
                                             )}
                                         </Box>
+
+                                        {/* Differential Privacy config */}
+                                        {selectedPrivacyChecks.includes('differential_privacy') && (
+                                            <Box sx={{ display: 'flex', gap: 2, mt: 2, flexWrap: 'wrap' }}>
+                                                <Box sx={{ flex: '1 1 30%', minWidth: 180 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                                                        Target ε (epsilon)
+                                                    </Typography>
+                                                    <TextField
+                                                        fullWidth
+                                                        size="small"
+                                                        type="number"
+                                                        value={dpTargetEpsilon}
+                                                        onChange={(e) => setDpTargetEpsilon(Number(e.target.value))}
+                                                        inputProps={{ min: 0.01, step: 0.1 }}
+                                                        helperText="Lower ε = stronger privacy guarantee"
+                                                    />
+                                                </Box>
+                                                <Box sx={{ flex: '1 1 30%', minWidth: 180, display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                    <Checkbox
+                                                        checked={dpApplyNoise}
+                                                        onChange={(_, checked) => setDpApplyNoise(checked)}
+                                                    />
+                                                    <Typography variant="body2">
+                                                        Apply Laplace noise to enforce ε budget
+                                                    </Typography>
+                                                </Box>
+                                            </Box>
+                                        )}
                                     </>
                                 )}
                             </Box>
@@ -1477,6 +1512,67 @@ export default function ValidationPage() {
                                                 ))}
                                             </Box>
                                         )}
+
+                                        {/* Explanation Fidelity */}
+                                        {results.validations.transparency.explanation_fidelity != null && (
+                                            <Box sx={{ mb: 1.5 }}>
+                                                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Explanation Fidelity</Typography>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                    <LinearProgress
+                                                        variant="determinate"
+                                                        value={results.validations.transparency.explanation_fidelity * 100}
+                                                        sx={{ flex: 1, height: 8, borderRadius: 1 }}
+                                                        color={results.validations.transparency.explanation_fidelity >= 0.8 ? 'success' : results.validations.transparency.explanation_fidelity >= 0.5 ? 'warning' : 'error'}
+                                                    />
+                                                    <Typography variant="caption" sx={{ fontWeight: 700, minWidth: 48, textAlign: 'right' }}>
+                                                        {(results.validations.transparency.explanation_fidelity * 100).toFixed(1)}%
+                                                    </Typography>
+                                                </Box>
+                                                <Typography variant="caption" color="text.secondary">
+                                                    1 − mean(|f(x) − g(x)|) — how faithfully LIME approximates the model
+                                                </Typography>
+                                            </Box>
+                                        )}
+
+                                        {/* LIME Local Explanation (1 sample) */}
+                                        {results.validations.transparency.lime_explanations?.length > 0 && (() => {
+                                            const lime = results.validations.transparency.lime_explanations[0];
+                                            const contributions = lime.feature_contributions
+                                                ? Object.entries(lime.feature_contributions)
+                                                    .sort(([, a]: any, [, b]: any) => Math.abs(b) - Math.abs(a))
+                                                    .slice(0, 5)
+                                                : [];
+                                            const hasSignificant = contributions.some(([, w]: any) => Math.abs(w) > 1e-6);
+                                            return (
+                                                <Box sx={{ mb: 1.5 }}>
+                                                    <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                                                        LIME — Sample #{lime.sample_index}
+                                                        {lime.predicted_label != null && ` → ${lime.predicted_label}`}
+                                                        {lime.prediction_probability != null && ` (${(lime.prediction_probability * 100).toFixed(1)}%)`}
+                                                    </Typography>
+                                                    {hasSignificant ? (
+                                                        <Box sx={{ p: 1, bgcolor: 'grey.50', borderRadius: 1 }}>
+                                                            {contributions.map(([feat, weight]: any) => (
+                                                                <Box key={feat} sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
+                                                                    <Typography variant="caption">{feat}</Typography>
+                                                                    <Typography variant="caption" sx={{ fontWeight: 700, color: weight >= 0 ? 'success.main' : 'error.main' }}>
+                                                                        {weight >= 0 ? '+' : ''}{weight.toFixed(4)}
+                                                                    </Typography>
+                                                                </Box>
+                                                            ))}
+                                                        </Box>
+                                                    ) : (
+                                                        <Typography variant="caption" color="text.secondary">
+                                                            All contributions ≈ 0 — model predictions are uniform across perturbations.
+                                                        </Typography>
+                                                    )}
+                                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                                                        See Full Report for all {results.validations.transparency.lime_explanations.length} LIME explanations.
+                                                    </Typography>
+                                                </Box>
+                                            );
+                                        })()}
+
                                         {results.validations.transparency.mlflow_run_id && (
                                             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                                                 MLflow: {results.validations.transparency.mlflow_run_id.substring(0, 8)}…
@@ -1572,7 +1668,7 @@ export default function ValidationPage() {
                             )}
                         </Box>
 
-                        <Box sx={{ mt: 4, display: 'flex', gap: 2 }}>
+                        <Box sx={{ mt: 4, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                             <Button variant="outlined" onClick={() => navigate(`/projects/${id}`)}>
                                 Back to Project
                             </Button>
@@ -1587,6 +1683,38 @@ export default function ValidationPage() {
                             </Button>
                             <Button variant="outlined" onClick={handleDownloadSuitePdf}>
                                 Download PDF
+                            </Button>
+                            <Button
+                                variant="outlined"
+                                onClick={() => {
+                                    const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = `validation_results_${results?.suite_id || 'export'}.json`;
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                }}
+                            >
+                                Export JSON
+                            </Button>
+                            <Button
+                                variant="outlined"
+                                color="secondary"
+                                startIcon={<RunIcon />}
+                                onClick={() => {
+                                    // Re-run: go back to step 0 keeping the current config
+                                    setResults(null);
+                                    setRunError('');
+                                    setIsRunning(false);
+                                    setTaskId('');
+                                    setSuiteId('');
+                                    setProgress(0);
+                                    setCurrentStep('');
+                                    setActiveStep(0);
+                                }}
+                            >
+                                Re-run Same Config
                             </Button>
                             <Button variant="contained" startIcon={<RefreshIcon />} onClick={handleReset}>
                                 Run Another Validation

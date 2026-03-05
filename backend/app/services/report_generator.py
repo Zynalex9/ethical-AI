@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,6 +16,10 @@ from app.models.project import Project
 from app.models.validation import Validation, ValidationResult
 from app.models.validation_suite import ValidationSuite
 from app.services.traceability_service import TraceabilityService
+
+# Jinja2 environment for HTML report templates
+_TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates")
+_jinja_env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=True)
 
 
 class ReportGenerator:
@@ -312,4 +317,121 @@ class ReportGenerator:
         for rec in report_data.get("recommendations", []):
             lines.append(f"- {rec}")
 
+        return self._simple_pdf_bytes(title, lines)
+
+    # ── Compliance Certificate PDF ──────────────────────────────────────
+    async def generate_html_report(self, validation_suite_id: UUID) -> str:
+        """Render a self-contained HTML report using Jinja2."""
+        report = await self.generate_validation_report(validation_suite_id)
+        validations = report.get("validations", {})
+
+        # Gather transparency extras
+        transparency = validations.get("transparency", {})
+        feature_importance = transparency.get("feature_importance", {})
+        explanation_fidelity = transparency.get("explanation_fidelity")
+
+        # Privacy report (from artifact JSON)
+        privacy_section = validations.get("privacy", {})
+        privacy_report_raw = privacy_section.get("report", {})
+
+        template = _jinja_env.get_template("report.html")
+        html = template.render(
+            project_name=report.get("project_name", "Unknown"),
+            model_name=report.get("model_name", "Unknown"),
+            dataset_name=report.get("dataset_name", "Unknown"),
+            validation_date=report.get("validation_date", "")[:10] if report.get("validation_date") else "",
+            overall_passed=report.get("overall_passed", False),
+            executive_summary=report.get("executive_summary", ""),
+            fairness_results=validations.get("fairness", {}).get("results", []),
+            feature_importance=feature_importance,
+            explanation_fidelity=explanation_fidelity,
+            privacy_report=privacy_report_raw,
+            recommendations=report.get("recommendations", []),
+            validation_suite_id=str(validation_suite_id),
+            generated_at=datetime.utcnow().isoformat(),
+        )
+        return html
+
+    # ── Compliance Certificate PDF ──────────────────────────────────────
+    async def generate_certificate_pdf(self, validation_suite_id: UUID) -> bytes:
+        """Generate a visually-distinct compliance certificate PDF for a suite."""
+        suite = await self._suite_or_404(validation_suite_id)
+        report = await self.generate_validation_report(validation_suite_id)
+
+        project_name = report.get("project_name", "Unknown Project")
+        model_name = report.get("model_name", "Unknown Model")
+        dataset_name = report.get("dataset_name", "Unknown Dataset")
+        validation_date = report.get("validation_date", datetime.utcnow().isoformat())
+        overall_passed = report.get("overall_passed", False)
+        verdict = "PASS" if overall_passed else "FAIL"
+
+        validations = report.get("validations", {})
+
+        # Determine per-principle scores
+        def _principle_status(key: str) -> str:
+            section = validations.get(key, {})
+            st = section.get("status", "not_run")
+            if st == "not_run":
+                return "NOT RUN"
+            if key == "fairness":
+                results = section.get("results", [])
+                if results and all(r.get("passed") for r in results):
+                    return "PASS"
+                return "FAIL"
+            if key == "privacy":
+                if section.get("overall_passed") is True:
+                    return "PASS"
+                return "FAIL"
+            if key == "transparency":
+                return "PASS" if st == "completed" else "FAIL"
+            return "N/A"
+
+        fairness_status = _principle_status("fairness")
+        transparency_status = _principle_status("transparency")
+        privacy_status = _principle_status("privacy")
+        accountability_status = "PASS" if validations.get("accountability") else "RECORDED"
+
+        # Build certificate body
+        lines = [
+            "",
+            "=" * 60,
+            "ETHICAL AI COMPLIANCE CERTIFICATE",
+            "=" * 60,
+            "",
+            f"Project:    {project_name}",
+            f"Model:      {model_name}",
+            f"Dataset:    {dataset_name}",
+            f"Date:       {validation_date[:10] if len(validation_date) >= 10 else validation_date}",
+            "",
+            "-" * 60,
+            f"OVERALL VERDICT:  {verdict}",
+            "-" * 60,
+            "",
+            "Principle Scores:",
+            f"  Fairness           {fairness_status}",
+            f"  Transparency       {transparency_status}",
+            f"  Privacy            {privacy_status}",
+            f"  Accountability     {accountability_status}",
+            "",
+            "-" * 60,
+            "Regulatory References Checked:",
+            "  - ECOA 80% Rule (Demographic Parity >= 0.80)",
+            "  - EEOC Four-Fifths Rule",
+            "  - GDPR / PII Detection",
+            "  - HIPAA Safe Harbor (if enabled)",
+            "",
+            "-" * 60,
+            "Recommendations:",
+        ]
+        for rec in report.get("recommendations", []):
+            lines.append(f"  - {rec}")
+        lines += [
+            "",
+            "=" * 60,
+            "This certificate was automatically generated by EthicScan AI.",
+            f"Suite ID: {validation_suite_id}",
+            "=" * 60,
+        ]
+
+        title = "COMPLIANCE CERTIFICATE"
         return self._simple_pdf_bytes(title, lines)

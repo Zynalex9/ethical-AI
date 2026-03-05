@@ -99,11 +99,15 @@ class TransparencyReport:
     visualizations: Dict[str, str]  # name -> base64 encoded image
     validation_passed: bool
     validation_details: Dict[str, Any]
+    lime_local_explanations: Optional[List[LocalExplanation]] = None
+    explanation_fidelity: Optional[float] = None  # 1 − mean(|f(x) − g(x)|)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "global_explanation": self.global_explanation.to_dict() if self.global_explanation else None,
             "local_explanations": [le.to_dict() for le in self.local_explanations],
+            "lime_local_explanations": [le.to_dict() for le in self.lime_local_explanations] if self.lime_local_explanations else None,
+            "explanation_fidelity": self.explanation_fidelity,
             "model_card": self.model_card,
             "visualizations": self.visualizations,
             "validation_passed": self.validation_passed,
@@ -442,6 +446,72 @@ class ExplainabilityEngine:
         
         return explanations
     
+    def compute_explanation_fidelity(
+        self,
+        X: np.ndarray,
+        instance_indices: Optional[List[int]] = None,
+        num_features: int = 10
+    ) -> float:
+        """
+        Compute explanation fidelity: 1 − mean(|f(x) − g(x)|).
+
+        f(x) is the original model's predicted probability and g(x) is the
+        LIME surrogate model's prediction for the same instance.  A score
+        close to 1.0 means the LIME surrogate faithfully mirrors the model.
+
+        Args:
+            X: Data containing instances to evaluate
+            instance_indices: Indices of instances (default: up to 20 random)
+            num_features: Features for each LIME fit
+
+        Returns:
+            Fidelity score in [0, 1]
+        """
+        try:
+            from lime.lime_tabular import LimeTabularExplainer
+        except ImportError:
+            logger.warning("LIME not installed – returning fidelity 0.0")
+            return 0.0
+
+        explainer = LimeTabularExplainer(
+            training_data=self.X_train,
+            feature_names=self.feature_names,
+            class_names=self.class_names,
+            mode='classification'
+        )
+
+        predict_fn = self._get_predict_fn()
+
+        if instance_indices is None:
+            n = min(20, len(X))
+            instance_indices = np.random.choice(len(X), n, replace=False).tolist()
+
+        diffs: List[float] = []
+        for idx in instance_indices:
+            instance = X[idx]
+            try:
+                exp = explainer.explain_instance(
+                    instance, predict_fn, num_features=num_features, top_labels=1
+                )
+                label = exp.available_labels()[0]
+                surrogate_pred = exp.local_pred[0] if hasattr(exp, 'local_pred') and len(exp.local_pred) > 0 else None
+                if surrogate_pred is None:
+                    continue
+                model_prob = predict_fn(instance.reshape(1, -1))[0]
+                if hasattr(model_prob, '__len__') and len(model_prob) > 1:
+                    model_prob = model_prob[label]
+                else:
+                    model_prob = float(model_prob)
+                diffs.append(abs(float(model_prob) - float(surrogate_pred)))
+            except Exception as e:
+                logger.warning(f"Fidelity computation failed for instance {idx}: {e}")
+
+        if not diffs:
+            return 0.0
+
+        fidelity = 1.0 - float(np.mean(diffs))
+        return max(0.0, min(1.0, fidelity))
+
     def generate_model_card(
         self,
         X_test: np.ndarray,

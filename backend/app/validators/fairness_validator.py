@@ -149,7 +149,7 @@ class FairnessValidator:
         "demographic_parity_difference": 0.1,
         "equalized_odds_ratio": 0.8,
         "equalized_odds_difference": 0.1,
-        "equal_opportunity_difference": 0.1,
+        "equal_opportunity_difference": 0.05,
         "disparate_impact_ratio": 0.8
     }
     

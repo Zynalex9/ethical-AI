@@ -221,3 +221,72 @@ export interface AuthTokens {
     refresh_token: string;
     token_type: string;
 }
+
+// Notification types (Phase 3)
+export interface Notification {
+    id: string;
+    user_id: string;
+    project_id: string | null;
+    validation_suite_id: string | null;
+    message: string;
+    severity: 'info' | 'warning' | 'error' | 'success';
+    read: boolean;
+    link: string | null;
+    details: Record<string, unknown> | null;
+    created_at: string;
+}
+
+// Scheduled Validation types (Phase 3)
+export interface ScheduledValidation {
+    id: string;
+    project_id: string;
+    enabled: boolean;
+    frequency: 'daily' | 'weekly' | 'monthly';
+    last_run_at: string | null;
+    next_run_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+// Differential Privacy result (Phase 3)
+export interface DPResult {
+    measured_epsilon: number;
+    target_epsilon: number;
+    budget_satisfied: boolean;
+    sensitivities: Record<string, number>;
+    noise_applied: boolean;
+    noised_epsilon: number | null;
+    details: string[];
+}
+
+// HIPAA check result (Phase 3)
+export interface HIPAACheckResult {
+    identifier: string;
+    passed: boolean;
+    columns_flagged: string[];
+    detail: string;
+}
+
+export interface HIPAAReport {
+    overall_passed: boolean;
+    total_checks: number;
+    passed_checks: number;
+    failed_checks: number;
+    results: HIPAACheckResult[];
+}
+
+// Remediation types (Phase 3)
+export interface RemediationStep {
+    id: string;
+    description: string;
+    done: boolean;
+    doc_link: string | null;
+}
+
+export interface RemediationChecklist {
+    id: string;
+    validation_suite_id: string;
+    principle: string;
+    steps: RemediationStep[];
+    all_done: boolean;
+}
