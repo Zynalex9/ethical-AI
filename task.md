@@ -334,3 +334,225 @@
 **Total: 17 tasks across 3 phases.**
 
 > Complete Phase 1 entirely before starting Phase 2. Phase 3 tasks are mostly independent of each other and can be prioritised individually based on user demand.
+
+---
+
+---
+
+## Phase 4 — Bug Fixes & UI Issues (Discovered March 2026)
+
+> These are active bugs and UX defects found during testing. Fix these before demoing the system.
+
+---
+
+### Task 4.1 — Fairness Radar Chart Is Meaningless / Wrong Scale
+
+**What:** The Fairness Radar chart shown after validation displays values that are not normalised to the 0–1 range expected by a radar chart. The axis labels show values like 0–4 instead of 0–1, making the chart visually misleading. All fairness metrics (demographic parity ratio, equalized odds ratio, disparate impact ratio, equalized odds difference, demographic parity difference) are already 0–1 values or close to it — the chart renderer is not setting the domain correctly.
+
+**Where to change:**
+- Frontend validation results page — find the `RadarChart` component and its data mapping
+- Clamp/normalise each metric value to [0, 1] before passing to the chart (ratio metrics are already 0–1; difference metrics should be clamped to [0, 1])
+- Set the `PolarRadiusAxis` domain to `[0, 1]` explicitly
+- Add threshold rings (e.g. a dashed ring at 0.8) so the user can see pass/fail at a glance
+
+**Acceptance criteria:**
+- Radar chart axis always shows 0–1
+- Each metric value maps correctly to the radar arm
+- A threshold ring or reference value is visible
+
+---
+
+### Task 4.2 — Confusion Matrix by Group Is Empty
+
+**What:** The "Confusion Matrix by Group" table is rendered with no rows even after a completed fairness validation. The table shows only the header row (Group | TP | FP | TN | FN) and nothing else.
+
+**Root cause to investigate:**
+- The `by_group` field in `ValidationResult.details` may not be storing confusion matrix data
+- Or the frontend component is looking for a field name that doesn't match what the backend sends (e.g. `confusion_matrix` vs `by_group_confusion_matrix`)
+- Check `_run_fairness_validation_async` in `validation_tasks.py` — confirm the confusion matrix per group is computed and saved in `details`
+- Check the frontend component that renders this table — confirm the field path it reads from
+
+**Where to change:**
+- Backend `validation_tasks.py` — ensure per-group TP/FP/TN/FN is computed and stored in `ValidationResult.details`
+- Frontend fairness result card — fix the field path so it reads the correct key from the API response
+
+**Acceptance criteria:**
+- After a fairness validation each demographic group appears as a row in the table
+- TP, FP, TN, FN values are populated for each group
+- Empty state message shown only when the data is genuinely absent
+
+---
+
+### Task 4.3 — k-Anonymity Group Distribution Chart Is Empty
+
+**What:** The "k-Anonymity Group Distribution" chart renders as an empty white box even after a successful privacy validation. No bars or data points appear.
+
+**Root cause to investigate:**
+- The privacy validator likely computes k-anonymity group sizes but the distribution data is not included in the API response, or is nested under a different key than what the frontend chart reads
+- Check `_run_privacy_validation_async` — confirm `group_distribution` or equivalent data is in the response
+- Check the frontend privacy result card — confirm the chart reads the correct field
+
+**Where to change:**
+- Backend privacy task — include per-group quasi-identifier equivalence class sizes in the result payload
+- Frontend chart component — read the correct field and pass it to the chart
+
+**Acceptance criteria:**
+- Chart shows a bar per equivalence class size (or bucketed histogram)
+- Chart is non-empty after any successful privacy validation that computed k-anonymity
+- Empty state shown only when k-anonymity was not selected
+
+---
+
+### Task 4.4 — Privacy Risk Score Is Always 20%
+
+**What:** The Privacy Risk Score gauge always shows 20% (Low Risk) regardless of the actual validation results. It is not dynamically computed from the privacy check outcomes.
+
+**Root cause to investigate:**
+- The risk score calculation is likely hard-coded or using a default value
+- Check the backend privacy task for where `privacy_risk_score` is computed
+- Check the frontend gauge component for whether it reads from the API or uses a static value
+
+**Where to change:**
+- Backend — compute the risk score based on: how many privacy checks failed, k value (lower = higher risk), l-diversity result, DP epsilon value if computed
+- A simple formula: `risk_score = (failed_checks / total_checks) * 100` is sufficient
+- Frontend — read the dynamic score from the API response
+
+**Acceptance criteria:**
+- Risk score changes based on actual check results
+- 0 failures → low risk (≤ 30%)
+- Partial failures → medium risk (30–70%)
+- Most/all failures → high risk (> 70%)
+- Score is computed server-side and returned in the API response
+
+---
+
+### Task 4.5 — PDF Report Is Unreadable (Letters Stacked / Overlapping)
+
+**What:** When exporting a validation report or compliance certificate to PDF, all text is rendered as a single column where letters and lines are stacked on top of each other, making the document completely unreadable.
+
+**Root cause:** The PDF generator (likely `reportlab` or `weasyprint`) has a layout/encoding issue — either the font is not embedded, the page width is not set correctly, or HTML → PDF conversion is failing to apply CSS layout rules.
+
+**Where to change:**
+- Backend PDF generator (`reports` service or router) — identify which library is used
+- If using `reportlab`: ensure `SimpleDocTemplate` page size is set to `A4` or `letter`, text is wrapped in `Paragraph` with a `SimpleDocStyle`, and multi-column layouts use `Table` with proper column widths
+- If using `weasyprint`/`pdfkit`: ensure the HTML template has explicit `width`, `font-family`, and `page` CSS rules; avoid using flexbox/grid for print layouts
+- Test by generating a report and opening the PDF in a viewer
+
+**Acceptance criteria:**
+- PDF opens cleanly with readable text
+- Sections for Fairness, Transparency, Privacy, Accountability each occupy their own visual area
+- No overlapping text or truncated content
+- Certificate PDF has a professional layout (header, sections, signature area, page number)
+
+---
+
+### Task 4.6 — "Scheduled Re-Validation" Section Needs Explanation & Current Status
+
+**What:** The Validations tab shows a "Scheduled Re-Validation" card with three buttons (Enable daily / Enable weekly / Enable monthly) but no explanation of what this does, no indication of whether a schedule is currently active, and no way to disable an existing schedule.
+
+**Where to change:**
+- Frontend `ScheduleSettings` component — add:
+  - A short description: "Automatically re-run the latest validation configuration on a regular schedule to detect model drift and regressions."
+  - Show current schedule status: "No schedule active" OR "Running weekly — next run: [date]"
+  - Add a "Disable" button that appears when a schedule is active
+  - Show the last scheduled run date and result (pass/fail)
+
+**Acceptance criteria:**
+- User can tell at a glance whether a schedule is active and when it last ran
+- "Disable" button cancels the schedule
+- Description text explains the feature in plain language
+
+---
+
+### Task 4.7 — Audit Log Page Is Empty (Shows No Records)
+
+**What:** The Audit Log page shows the correct table structure (Date | Action | Resource | User ID | Details) with pagination showing "1–25 of more than 25" but no rows are rendered. The data exists in the database (`audit_logs` table) but is not displayed.
+
+**Root cause to investigate:**
+- The frontend audit log component likely calls the API and gets data back, but maps the wrong field names
+- Or the backend returns records but uses `user_id` as a UUID and the frontend tries to render it as a name
+- Check the audit log API endpoint response shape and compare to what the frontend table expects
+
+**Where to change:**
+- Frontend Audit Log page/component — fix field name mappings so rows actually render
+- Ensure `action`, `resource_type`, `resource_id`, `created_at`, and `details` all map to the correct table cells
+- Format `user_id` as the user's email or name if possible (join on users table in the backend), otherwise display the truncated UUID
+
+**Acceptance criteria:**
+- Audit log rows are visible after page load
+- Each row shows: date/time, action type, resource type + truncated ID, user identifier, and a summary of details
+- Pagination works correctly
+
+---
+
+### Task 4.8 — Fairness Validation Detail Page With Metric Explanations
+
+**What:** After a fairness validation completes, users see metric names and pass/fail chips but no explanation of what each metric means, why it passed or failed, or what to do about it. There is no dedicated detail page for fairness results.
+
+**What to build:**
+- A dedicated Fairness Detail view (modal or expanded section within the validation results page)
+- For each metric, show:
+  - **Metric name** with a plain-English definition (e.g. "Demographic Parity Ratio — measures whether positive prediction rates are equal across demographic groups")
+  - **Your value** vs **threshold** (e.g. "0.72 vs required ≥ 0.80")
+  - **Status**: Pass ✓ or Fail ✗ with a coloured badge
+  - **Why it failed** (if applicable): e.g. "Group 'Female' received positive predictions 28% less often than group 'Male'"
+  - **What to do**: a brief 1–2 sentence remediation hint (e.g. "Consider reweighing training data or applying post-processing equalisation")
+- Per-group breakdown table already exists but should be linked from this detail view
+- Add a "View Details" button on the metric rows in the results card to open this view
+
+**Metric definitions to include:**
+| Metric | Definition | Threshold | Fail Meaning |
+|---|---|---|---|
+| Demographic Parity Ratio | Ratio of positive prediction rates between groups | ≥ 0.80 | One group gets fewer positive predictions proportionally |
+| Equalized Odds Ratio | Ratio of true positive AND false positive rates across groups | ≥ 0.80 | Model is more accurate for one group than another |
+| Disparate Impact Ratio | Ratio of selection rates — ECOA/EEOC 80% rule | ≥ 0.80 | Adverse impact on protected group under employment law |
+| Equalized Odds Difference | Absolute difference in TPR/FPR across groups | ≤ 0.10 | Unequal error rates between groups |
+| Demographic Parity Difference | Absolute difference in positive prediction rates | ≤ 0.10 | Unequal selection rates between groups |
+
+**Where to change:**
+- Frontend: add a `FairnessMetricDetail` component (modal or expandable section)
+- Embed metric definitions as a static lookup table in the component (no backend change needed for definitions)
+- The per-group data already comes from the API — wire it to this component
+
+**Acceptance criteria:**
+- Each metric in the fairness results card has a "?" or "Details" button
+- Clicking it shows the metric definition, current value, threshold, pass/fail reason, and a remediation hint
+- Per-group breakdown is accessible from this view
+- Works for both passed and failed metrics
+
+---
+
+### Task 4.9 — LIME/SHAP Feature Contribution Chart Shows All Zeros
+
+**What:** The LIME explanations section shows bars for features like `feature_0`, `feature_1`, etc. all with value `0.000` and `shap_contribution: 0`. The explanation fidelity shows 100% which is suspicious — it means the local model perfectly matches predictions of 0 contributions, suggesting the model is either constant or the feature extraction is wrong.
+
+**Root cause to investigate:**
+- The dummy model or the uploaded model may be predicting the same class for all inputs (constant predictor), which causes all SHAP/LIME contributions to be zero
+- Or the feature names extracted from the dataset are not the same features the model was trained on (mismatch in column names or encodings)
+- Check `ExplainabilityEngine` — confirm it is passing the correct feature-aligned `X` to LIME/SHAP
+- Check whether the dummy model in `examples/dummy_model.py` actually returns varying predictions
+
+**Where to change:**
+- Backend `explainability_engine.py` — add a check: if all SHAP/LIME values are zero, log a warning and include a `"warning": "All contributions are zero — model may be constant or feature mismatch detected"` in the response
+- Frontend — show this warning prominently if present instead of silently rendering zero bars
+- Documentation hint: instruct users to upload a properly trained model with varying predictions
+
+**Acceptance criteria:**
+- If all contributions are zero, a visible warning is shown in the UI
+- The warning explains the likely cause in plain language
+- For a model with real varying predictions, SHAP/LIME contributions are non-zero
+
+---
+
+## Summary
+
+| Phase | Tasks | Effort per Task | Primary Gap Closed |
+|---|---|---|---|
+| Phase 1 — Quick Wins | 5 | 1–2 days | Missing metric formulas, threshold values, missing UI actions |
+| Phase 2 — Medium Effort | 6 | 2–5 days | Data formats, history charts, certificate PDF, regulatory labels, run comparison |
+| Phase 3 — Complex | 6 | 1–2 weeks | DP measurement, scheduled monitoring, alerts, HIPAA, HTML export, remediation |
+| Phase 4 — Bug Fixes & UI Issues | 9 | 0.5–2 days | Charts empty/wrong, PDF broken, audit log invisible, missing detail pages |
+
+**Total: 26 tasks across 4 phases.**
+
+> Complete Phase 1 entirely before starting Phase 2. Phase 3 tasks are mostly independent of each other and can be prioritised individually based on user demand. Phase 4 bugs should be fixed in parallel with or before any Phase 2/3 work since they affect demo-ability.

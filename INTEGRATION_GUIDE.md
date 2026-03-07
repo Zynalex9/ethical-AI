@@ -42,6 +42,43 @@ uvicorn app.main:app --reload
 ```powershell
 cd backend
 .\venv\Scripts\activate
+### Task 4.1 — Fairness Radar Chart Is Meaningless / Wrong Scale
+
+**What:** The Fairness Radar chart shown after validation displays values that are not normalised to the 0–1 range expected by a radar chart. The axis labels show values like 0–4 instead of 0–1, making the chart visually misleading. All fairness metrics (demographic parity ratio, equalized odds ratio, disparate impact ratio, equalized odds difference, demographic parity difference) are already 0–1 values or close to it — the chart renderer is not setting the domain correctly.
+
+**Where to change:**
+- Frontend validation results page — find the `RadarChart` component and its data mapping
+- Clamp/normalise each metric value to [0, 1] before passing to the chart (ratio metrics are already 0–1; difference metrics should be clamped to [0, 1])
+- Set the `PolarRadiusAxis` domain to `[0, 1]` explicitly
+- Add threshold rings (e.g. a dashed ring at 0.8) so the user can see pass/fail at a glance
+
+**Acceptance criteria:**
+- Radar chart axis always shows 0–1
+- Each metric value maps correctly to the radar arm
+- A threshold ring or reference value is visible
+
+---
+
+### Task 4.2 — Confusion Matrix by Group Is Empty
+
+**What:** The "Confusion Matrix by Group" table is rendered with no rows even after a completed fairness validation. The table shows only the header row (Group | TP | FP | TN | FN) and nothing else.
+
+**Root cause to investigate:**
+- The `by_group` field in `ValidationResult.details` may not be storing confusion matrix data
+- Or the frontend component is looking for a field name that doesn't match what the backend sends (e.g. `confusion_matrix` vs `by_group_confusion_matrix`)
+- Check `_run_fairness_validation_async` in `validation_tasks.py` — confirm the confusion matrix per group is computed and saved in `details`
+- Check the frontend component that renders this table — confirm the field path it reads from
+
+**Where to change:**
+- Backend `validation_tasks.py` — ensure per-group TP/FP/TN/FN is computed and stored in `ValidationResult.details`
+- Frontend fairness result card — fix the field path so it reads the correct key from the API response
+
+**Acceptance criteria:**
+- After a fairness validation each demographic group appears as a row in the table
+- TP, FP, TN, FN values are populated for each group
+- Empty state message shown only when the data is genuinely absent
+
+---
 
 # Start Celery worker (required for background tasks!)
 celery -A app.celery_app worker --loglevel=info --pool=solo

@@ -111,6 +111,7 @@ class KAnonymityResult:
     total_groups: int
     quasi_identifiers: List[str]
     rows_with_missing_values: int = 0  # FIX: Track missing values
+    distribution: Dict[int, int] = field(default_factory=dict)  # Group size -> count
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -121,7 +122,8 @@ class KAnonymityResult:
             "violating_groups": self.violating_groups[:5],  # Sample
             "total_groups": int(self.total_groups),
             "quasi_identifiers": [str(qi) for qi in self.quasi_identifiers],
-            "rows_with_missing_values": int(self.rows_with_missing_values)
+            "rows_with_missing_values": int(self.rows_with_missing_values),
+            "distribution": {str(k): int(v) for k, v in self.distribution.items()}  # Convert to JSON-friendly format
         }
 
 
@@ -473,6 +475,12 @@ class PrivacyValidator:
             group['count'] = int(row['count'])
             violating_groups.append(group)
         
+        # Compute distribution of group sizes for visualization
+        distribution = {}
+        for size in grouped['count'].values:
+            size_int = int(size)
+            distribution[size_int] = distribution.get(size_int, 0) + 1
+        
         result = KAnonymityResult(
             k_value=k,
             satisfies_k=len(violating) == 0,
@@ -480,7 +488,8 @@ class PrivacyValidator:
             violating_groups=violating_groups,
             total_groups=len(grouped),
             quasi_identifiers=quasi_identifiers,
-            rows_with_missing_values=int(rows_with_missing)
+            rows_with_missing_values=int(rows_with_missing),
+            distribution=distribution
         )
         
         status = 'PASSED' if result.satisfies_k else 'FAILED'

@@ -23,7 +23,15 @@ interface FairnessVisualizationProps {
 
 export default function FairnessVisualization({ metrics, confusion_matrices }: FairnessVisualizationProps) {
     const barData = metrics.map((m) => ({ metric: m.name, value: m.value, threshold: m.threshold }));
-    const radarData = metrics.map((m) => ({ metric: m.name, actual: m.value, threshold: m.threshold }));
+    
+    // Normalize metrics to [0, 1] range for radar chart
+    // Ratio metrics are already 0-1, but clamp just in case
+    // Difference metrics should also be 0-1
+    const radarData = metrics.map((m) => ({ 
+        metric: m.name, 
+        actual: Math.min(Math.max(m.value, 0), 1),  // Clamp to [0, 1]
+        threshold: Math.min(Math.max(m.threshold, 0), 1)  // Clamp threshold too
+    }));
 
     const groupData = metrics[0]?.by_group
         ? Object.entries(metrics[0].by_group).map(([group, rate]) => ({ group, rate }))
@@ -72,11 +80,15 @@ export default function FairnessVisualization({ metrics, confusion_matrices }: F
                     <Box sx={{ height: 340 }}>
                         <ResponsiveContainer width="100%" height="100%">
                             <RadarChart data={radarData}>
-                                <PolarGrid />
+                                <PolarGrid gridType="polygon" />
                                 <PolarAngleAxis dataKey="metric" />
-                                <PolarRadiusAxis />
+                                <PolarRadiusAxis domain={[0, 1]} tick={{ fontSize: 12 }} />
                                 <Radar name="Actual" dataKey="actual" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.35} />
                                 <Radar name="Threshold" dataKey="threshold" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} />
+                                {/* Threshold reference ring at 0.8 (common fairness threshold) */}
+                                <Radar name="0.8 Rule" dataKey="reference" stroke="#ef4444" strokeDasharray="5 5" fill="transparent" 
+                                       data={radarData.map(d => ({ ...d, reference: 0.8 }))} />
+                                <Tooltip />
                             </RadarChart>
                         </ResponsiveContainer>
                     </Box>

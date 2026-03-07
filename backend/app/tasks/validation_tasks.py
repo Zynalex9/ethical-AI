@@ -358,8 +358,34 @@ async def _run_fairness_validation_async(
                 }
             )
             db.add(result_record)
+        
+        # Save confusion matrices as a special ValidationResult record
+        confusion_matrices_data = {
+            cm.group_name: {
+                "tp": int(cm.tp),
+                "fp": int(cm.fp),
+                "tn": int(cm.tn),
+                "fn": int(cm.fn),
+                "accuracy": float(cm.accuracy),
+                "tpr": float(cm.tpr),
+                "fpr": float(cm.fpr)
+            }
+            for cm in report.confusion_matrices
+        }
+        
+        confusion_result = ValidationResult(
+            validation_id=UUID(validation_id),
+            principle="fairness",
+            metric_name="group_confusion_matrices",  # Match frontend expectation
+            metric_value=None,  # No single scalar value
+            threshold=None,
+            passed=True,  # Always passes, just informational
+            details=_convert_to_json_serializable(confusion_matrices_data)
+        )
+        db.add(confusion_result)
+        
         await db.commit()
-        logger.info(f"Saved {len(report.metrics)} validation results to database")
+        logger.info(f"Saved {len(report.metrics)} validation results and confusion matrices to database")
         
         # Log summary
         passed_count = sum(1 for m in report.metrics if m.passed)
@@ -405,11 +431,24 @@ async def _run_fairness_validation_async(
                 "by_group": m.by_group
             }
         
+        # Format confusion matrices for frontend
+        confusion_matrices = [
+            {
+                "group": cm.group_name,
+                "tp": cm.tp,
+                "fp": cm.fp,
+                "tn": cm.tn,
+                "fn": cm.fn
+            }
+            for cm in report.confusion_matrices
+        ]
+        
         result_dict = {
             "validation_id": validation_id,
             "status": "completed",
             "overall_passed": report.overall_passed,
             "metrics": metrics,
+            "confusion_matrices": confusion_matrices,
             "group_metrics": {
                 "groups": report.groups,
                 "sample_sizes": report.sample_sizes
@@ -977,11 +1016,59 @@ async def _run_privacy_validation_async(
             metrics["hipaa_passed"] = 1.0 if hipaa_result.overall_passed else 0.0
             metrics["hipaa_checks_passed"] = float(hipaa_result.passed_checks)
         
+        # Calculate dynamic privacy risk score
+        total_checks = 0
+        failed_checks = 0
+        
+        # Count PII detection
+        if 'pii_detection' in checks:
+            total_checks += 1
+            pii_count = len([r for r in report.pii_results if r.is_pii])
+            if pii_count > 0:
+                failed_checks += 1
+        
+        # Count k-anonymity
+        if report.k_anonymity:
+            total_checks += 1
+            if not report.k_anonymity.satisfies_k:
+                failed_checks += 1
+            # Additional risk for very low k values
+            if report.k_anonymity.actual_min_k < 3:
+                failed_checks += 0.5  # Partial failure for low k
+        
+        # Count l-diversity
+        if report.l_diversity:
+            total_checks += 1
+            if not report.l_diversity.satisfies_l:
+                failed_checks += 1
+        
+        # Count differential privacy
+        if dp_result:
+            total_checks += 1
+            if not dp_result.budget_satisfied:
+                failed_checks += 1
+        
+        # Count HIPAA
+        if hipaa_result:
+            total_checks += 1
+            if not hipaa_result.overall_passed:
+                failed_checks += 1
+        
+        # Calculate risk score: 0% = no risk, 100% = all checks failed
+        if total_checks > 0:
+            privacy_risk_score = min(100, int((failed_checks / total_checks) * 100))
+        else:
+            privacy_risk_score = 0
+        
+        metrics["privacy_risk_score"] = float(privacy_risk_score)
+        
         report_dict = report.to_dict()
         if dp_result:
             report_dict["differential_privacy"] = dp_result.to_dict()
         if hipaa_result:
             report_dict["hipaa"] = hipaa_result.to_dict()
+        # Add privacy_risk_score to the artifact for frontend consumption
+        report_dict["privacy_risk_score"] = privacy_risk_score
 
         tracker.log_metrics(metrics)
         tracker.log_dict(report_dict, "privacy_report.json")
@@ -1030,6 +1117,7 @@ async def _run_privacy_validation_async(
             "l_diversity": report.l_diversity.to_dict() if report.l_diversity else None,
             "differential_privacy": dp_result.to_dict() if dp_result else None,
             "hipaa": hipaa_result.to_dict() if hipaa_result else None,
+            "privacy_risk_score": privacy_risk_score,
             "recommendations": report.recommendations,
             "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
         }

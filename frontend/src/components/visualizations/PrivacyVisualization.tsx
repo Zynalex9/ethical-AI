@@ -47,17 +47,25 @@ export default function PrivacyVisualization({ piiDetected, kAnonymityGroups = [
             <Card>
                 <CardContent>
                     <Typography variant="h6" sx={{ mb: 2 }}>k-Anonymity Group Distribution</Typography>
-                    <Box sx={{ height: 280 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={kAnonymityGroups}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="size" />
-                                <YAxis />
-                                <Tooltip />
-                                <Bar dataKey="count" fill="#3b82f6" />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </Box>
+                    {kAnonymityGroups.length === 0 ? (
+                        <Box sx={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Typography variant="body2" color="text.secondary">
+                                No k-anonymity data available. Run a privacy validation with k-anonymity enabled.
+                            </Typography>
+                        </Box>
+                    ) : (
+                        <Box sx={{ height: 280 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={kAnonymityGroups}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="size" label={{ value: 'Group Size', position: 'insideBottom', offset: -5 }} />
+                                    <YAxis label={{ value: 'Number of Groups', angle: -90, position: 'insideLeft' }} />
+                                    <Tooltip />
+                                    <Bar dataKey="count" fill="#3b82f6" />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </Box>
+                    )}
                 </CardContent>
             </Card>
 

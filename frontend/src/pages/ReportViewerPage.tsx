@@ -101,7 +101,8 @@ export default function ReportViewerPage() {
     const kDist = privacyReport?.k_anonymity?.distribution
         ? Object.entries(privacyReport.k_anonymity.distribution).map(([size, count]) => ({ size: Number(size), count: Number(count) }))
         : [];
-    const riskScore = piiDetected.length > 0 ? Math.min(90, 40 + piiDetected.length * 10) : 20;
+    // Read privacy_risk_score from API response (computed dynamically by backend)
+    const riskScore = privacyReport?.privacy_risk_score ?? 0;
 
     const handleDownloadBackendPdf = async () => {
         const blob = await reportsApi.downloadValidationPdf(suiteId!);
