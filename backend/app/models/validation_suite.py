@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import String, DateTime, Boolean, ForeignKey, func
+from sqlalchemy import String, Text, DateTime, Boolean, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -105,7 +105,7 @@ class ValidationSuite(Base):
         nullable=True
     )
     error_message: Mapped[Optional[str]] = mapped_column(
-        String(1000),
+        Text,
         nullable=True
     )
     created_by_id: Mapped[uuid.UUID] = mapped_column(

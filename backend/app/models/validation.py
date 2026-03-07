@@ -101,7 +101,7 @@ class Validation(Base):
         nullable=True
     )
     error_message: Mapped[Optional[str]] = mapped_column(
-        String(1000),
+        Text,
         nullable=True
     )
     # Phase 3: traceability fields

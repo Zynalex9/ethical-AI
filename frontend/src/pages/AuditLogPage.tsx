@@ -45,6 +45,34 @@ export default function AuditLogPage() {
         meta: { ignoreError: true } // Suppress error notifications
     });
 
+    const logRows = Array.isArray(logs)
+        ? logs
+        : Array.isArray(logs?.items)
+            ? logs.items
+            : Array.isArray(logs?.data)
+                ? logs.data
+                : [];
+
+    const totalRows = typeof logs?.total === 'number'
+        ? logs.total
+        : typeof logs?.count === 'number'
+            ? logs.count
+            : -1;
+
+    const truncateUuid = (value?: string | null) => {
+        if (!value) return 'System';
+        return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+    };
+
+    const summarizeDetails = (details: any) => {
+        if (!details || typeof details !== 'object') return 'No details';
+        const entries = Object.entries(details).slice(0, 2);
+        if (entries.length === 0) return 'No details';
+        return entries
+            .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+            .join(' | ');
+    };
+
     return (
         <Container maxWidth="xl" sx={{ py: 4 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 4 }}>
@@ -101,23 +129,38 @@ export default function AuditLogPage() {
                                         <TableCell>Date</TableCell>
                                         <TableCell>Action</TableCell>
                                         <TableCell>Resource</TableCell>
-                                        <TableCell>User ID</TableCell>
+                                        <TableCell>User</TableCell>
                                         <TableCell>Details</TableCell>
                                     </TableRow>
                                 </TableHead>
                                 <TableBody>
-                                    {logs?.map((log: any) => (
+                                    {logRows.length === 0 && (
+                                        <TableRow>
+                                            <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                                                No audit records found.
+                                            </TableCell>
+                                        </TableRow>
+                                    )}
+                                    {logRows.map((log: any) => (
                                         <TableRow key={log.id}>
-                                            <TableCell>{new Date(log.created_at).toLocaleString()}</TableCell>
+                                            <TableCell>{new Date(log.created_at || log.timestamp).toLocaleString()}</TableCell>
                                             <TableCell>
                                                 <Chip label={log.action} size="small" variant="outlined" />
                                             </TableCell>
-                                            <TableCell>{log.resource_type}</TableCell>
-                                            <TableCell>{log.user_id}</TableCell>
                                             <TableCell>
-                                                <IconButton size="small" onClick={() => setSelectedLog(log)}>
-                                                    <ViewIcon />
-                                                </IconButton>
+                                                {log.resource_type}
+                                                {log.resource_id ? ` • ${truncateUuid(String(log.resource_id))}` : ''}
+                                            </TableCell>
+                                            <TableCell>{log.user_email || truncateUuid(String(log.user_id || ''))}</TableCell>
+                                            <TableCell>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                    <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 320 }} noWrap>
+                                                        {summarizeDetails(log.details)}
+                                                    </Typography>
+                                                    <IconButton size="small" onClick={() => setSelectedLog(log)}>
+                                                        <ViewIcon />
+                                                    </IconButton>
+                                                </Box>
                                             </TableCell>
                                         </TableRow>
                                     ))}
@@ -126,7 +169,7 @@ export default function AuditLogPage() {
                         </TableContainer>
                         <TablePagination
                             component="div"
-                            count={-1}
+                            count={totalRows}
                             rowsPerPage={rowsPerPage}
                             page={page}
                             onPageChange={(_, p) => setPage(p)}

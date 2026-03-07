@@ -94,6 +94,8 @@ export default function ReportViewerPage() {
         }));
     }, [data]);
 
+    const transparencyWarning = data?.validations?.transparency?.warning;
+
     const firstLime = localExplanations[0];
 
     const privacyReport = data?.validations?.privacy?.report || {};
@@ -215,6 +217,11 @@ export default function ReportViewerPage() {
 
             <TabPanel value={tab} index={1}>
                 <Box sx={{ display: 'grid', gap: 2 }}>
+                    {transparencyWarning && (
+                        <Alert severity="warning">
+                            {transparencyWarning}. Upload a properly trained model with varying predictions and matching feature schema.
+                        </Alert>
+                    )}
                     <SHAPVisualization globalImportance={shapGlobal} localExplanations={localExplanations} />
                     {firstLime && (
                         <LIMEVisualization

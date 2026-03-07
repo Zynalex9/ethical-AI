@@ -70,6 +70,7 @@ interface TransparencyData {
         }>;
         base_value: number;
     }>;
+    warning?: string;
     completed_at: string;
 }
 
@@ -184,6 +185,12 @@ export default function TransparencyDetailPage() {
             </Box>
 
             {/* Feature Importance Section */}
+            {transparencyData.warning && (
+                <Alert severity="warning" sx={{ mb: 3 }}>
+                    {transparencyData.warning}. Upload a properly trained model with varying predictions and matching feature schema.
+                </Alert>
+            )}
+
             {hasFeatureImportance && chartData.length > 0 && (
                 <Card sx={{ mb: 3 }}>
                     <CardContent>

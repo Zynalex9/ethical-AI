@@ -59,7 +59,7 @@ async def list_audit_logs(
     """
     List audit logs with optional filters.
     """
-    query = select(AuditLog)
+    query = select(AuditLog, User.email).outerjoin(User, AuditLog.user_id == User.id)
         
     if action:
         query = query.where(AuditLog.action == action)
@@ -68,28 +68,28 @@ async def list_audit_logs(
     if user_id:
         query = query.where(AuditLog.user_id == user_id)
     if start_date:
-        query = query.where(AuditLog.created_at >= start_date)
+        query = query.where(AuditLog.timestamp >= start_date)
     if end_date:
-        query = query.where(AuditLog.created_at <= end_date)
+        query = query.where(AuditLog.timestamp <= end_date)
         
-    query = query.order_by(desc(AuditLog.created_at)).offset(skip).limit(limit)
+    query = query.order_by(desc(AuditLog.timestamp)).offset(skip).limit(limit)
     
     result = await db.execute(query)
-    logs = result.scalars().all()
+    logs = result.all()
     
     return [
         AuditLogResponse(
             id=log.id,
             user_id=log.user_id,
-            user_email=None,  # Optimization: skip user join for now
+            user_email=user_email,
             action=log.action.value if hasattr(log.action, 'value') else str(log.action),
             resource_type=log.resource_type.value if hasattr(log.resource_type, 'value') else str(log.resource_type),
             resource_id=log.resource_id,
             ip_address=log.ip_address,
             details=log.details,
-            created_at=log.created_at
+            created_at=log.timestamp,
         )
-        for log in logs
+        for log, user_email in logs
     ]
 
 
@@ -108,11 +108,11 @@ async def get_audit_summary(
     total = await db.scalar(total_query) or 0
     
     # For today
-    today_query = select(func.count(AuditLog.id)).where(AuditLog.created_at >= today)
+    today_query = select(func.count(AuditLog.id)).where(AuditLog.timestamp >= today)
     today_count = await db.scalar(today_query) or 0
     
     # For this week
-    week_query = select(func.count(AuditLog.id)).where(AuditLog.created_at >= week_ago)
+    week_query = select(func.count(AuditLog.id)).where(AuditLog.timestamp >= week_ago)
     week_count = await db.scalar(week_query) or 0
     
     # By action

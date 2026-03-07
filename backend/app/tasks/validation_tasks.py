@@ -31,6 +31,14 @@ from app.validators.accountability_tracker import AccountabilityTracker
 logger = logging.getLogger(__name__)
 
 
+def _safe_error_message(e: Exception, max_length: int = 2000) -> str:
+    """Truncate error messages to prevent DB column overflow."""
+    msg = str(e)
+    if len(msg) > max_length:
+        return msg[:max_length - 50] + f"... [truncated, total {len(msg)} chars]"
+    return msg
+
+
 # Create async engine for tasks
 engine = create_async_engine(
     settings.database_url,
@@ -133,6 +141,8 @@ async def _run_fairness_validation_async(
     progress_callback=None
 ) -> Dict[str, Any]:
     """Core fairness validation logic (async)."""
+    validation: Optional[Validation] = None
+    tracker: Optional[AccountabilityTracker] = None
     
     def _convert_to_json_serializable(obj):
         """Recursively convert numpy types to Python native types."""
@@ -299,8 +309,13 @@ async def _run_fairness_validation_async(
         y_true_unique = np.unique(y_true)
         logger.info(f"y_true unique values: {y_true_unique}")
         if not np.all(np.isin(y_true, [0, 1])):
-            logger.error(f"y_true contains non-binary values: {y_true_unique}")
-            raise ValueError(f"Target values must be binary (0 or 1), got: {y_true_unique}")
+            n_unique = len(y_true_unique)
+            sample = y_true_unique[:10].tolist()
+            logger.error(f"y_true contains non-binary values: {n_unique} unique values, sample: {sample}")
+            raise ValueError(
+                f"Target values must be binary (0 or 1), got {n_unique} unique values. "
+                f"Sample: {sample}. Encode the target column to 0/1 before validation."
+            )
         
         if progress_callback:
             progress_callback(70, "Calculating fairness metrics")
@@ -460,16 +475,22 @@ async def _run_fairness_validation_async(
         return _convert_to_json_serializable(result_dict)
         
     except Exception as e:
-        # Update validation on error
-        validation.status = ValidationStatus.FAILED
-        validation.error_message = str(e)
-        validation.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        # Update validation on error with rollback recovery
+        try:
+            await db.rollback()
+            if validation is not None:
+                validation.status = ValidationStatus.FAILED
+                validation.error_message = _safe_error_message(e)
+                validation.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+        except Exception as db_err:
+            logger.error(f"Failed to persist fairness error state: {db_err}")
         
         # End MLflow run with error
         try:
-            tracker.end_validation_run(status="error", error_message=str(e))
-        except:
+            if tracker is not None:
+                tracker.end_validation_run(status="error", error_message=_safe_error_message(e))
+        except Exception:
             pass
         
         raise
@@ -543,14 +564,9 @@ async def _run_transparency_validation_async(
     progress_callback=None
 ) -> Dict[str, Any]:
     """Core transparency validation logic (async)."""
+    validation: Optional[Validation] = None
+    tracker: Optional[AccountabilityTracker] = None
     try:
-        # FIX: Validate that target_column is provided
-        if not target_column or target_column is None:
-            raise ValueError(
-                "Target column is required for transparency validation. "
-                "Please specify the target column in the validation form."
-            )
-        
         if progress_callback:
             progress_callback(10, "Loading model")
         
@@ -562,6 +578,20 @@ async def _run_transparency_validation_async(
         validation.status = ValidationStatus.RUNNING
         validation.progress = 10
         await db.commit()
+
+        # If target column is not provided, skip transparency instead of failing the suite.
+        if not target_column:
+            validation.status = ValidationStatus.CANCELLED
+            validation.progress = 100
+            validation.error_message = "Transparency validation skipped: target column not provided."
+            validation.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return {
+                "validation_id": validation_id,
+                "status": "skipped",
+                "skipped": True,
+                "message": "Transparency validation skipped because target column was not selected."
+            }
         
         # Get model and dataset
         result = await db.execute(
@@ -716,6 +746,7 @@ async def _run_transparency_validation_async(
         
         # Generate sample local explanations (Phase 2)
         sample_predictions = []
+        transparency_warning: Optional[str] = None
         num_samples = min(5, len(X_sample))  # Get 5 example predictions
         sample_indices = np.random.choice(len(X_sample), num_samples, replace=False).tolist()
         
@@ -796,6 +827,45 @@ async def _run_transparency_validation_async(
         except Exception as e:
             logger.warning(f"⚠️ LIME / fidelity computation failed (non-fatal): {e}", exc_info=True)
 
+        # Detect potentially invalid explanations: all SHAP/LIME contributions are approximately zero.
+        shap_values = [
+            float(feature_info.get("shap_contribution", 0.0))
+            for sample in sample_predictions
+            for feature_info in sample.get("top_features", {}).values()
+        ]
+        lime_values = [
+            float(v)
+            for lime in lime_explanations_serialized
+            for v in lime.get("feature_contributions", {}).values()
+        ]
+
+        has_shap = len(shap_values) > 0
+        has_lime = len(lime_values) > 0
+        shap_all_zero = has_shap and all(abs(v) <= 1e-12 for v in shap_values)
+        lime_all_zero = has_lime and all(abs(v) <= 1e-12 for v in lime_values)
+
+        if (has_shap and shap_all_zero) or (has_lime and lime_all_zero):
+            transparency_warning = (
+                "All contributions are zero — model may be constant or feature mismatch detected"
+            )
+            logger.warning(
+                "Transparency warning: all SHAP/LIME contributions are zero. "
+                "Likely constant model predictions or feature mismatch between training and inference schema."
+            )
+
+            # Persist warning with artifacts so report/detail pages can surface it.
+            tracker.log_dict({"warning": transparency_warning}, "transparency_warning.json")
+            if sample_predictions:
+                tracker.log_dict(
+                    {"samples": sample_predictions, "warning": transparency_warning},
+                    "sample_predictions.json",
+                )
+            if lime_explanations_serialized:
+                tracker.log_dict(
+                    {"lime_explanations": lime_explanations_serialized, "warning": transparency_warning},
+                    "lime_explanations.json",
+                )
+
         if progress_callback:
             progress_callback(90, "Saving results")
         validation.progress = 90
@@ -834,18 +904,26 @@ async def _run_transparency_validation_async(
             "sample_predictions": sample_predictions,
             "lime_explanations": lime_explanations_serialized,
             "explanation_fidelity": explanation_fidelity,
+            "warning": transparency_warning,
             "mlflow_run_id": tracker._current_run.info.run_id if tracker._current_run else None
         }
         
     except Exception as e:
-        validation.status = ValidationStatus.FAILED
-        validation.error_message = str(e)
-        validation.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        # Update validation on error with rollback recovery
+        try:
+            await db.rollback()
+            if validation is not None:
+                validation.status = ValidationStatus.FAILED
+                validation.error_message = _safe_error_message(e)
+                validation.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+        except Exception as db_err:
+            logger.error(f"Failed to persist transparency error state: {db_err}")
         
         try:
-            tracker.end_validation_run(status="error", error_message=str(e))
-        except:
+            if tracker is not None:
+                tracker.end_validation_run(status="error", error_message=_safe_error_message(e))
+        except Exception:
             pass
         
         raise
@@ -867,6 +945,8 @@ async def _run_privacy_validation_async(
     dp_apply_noise: bool = False,
 ) -> Dict[str, Any]:
     """Core privacy validation logic (async)."""
+    validation: Optional[Validation] = None
+    tracker: Optional[AccountabilityTracker] = None
     try:
         if progress_callback:
             progress_callback(10, "Loading dataset")
@@ -1123,14 +1203,21 @@ async def _run_privacy_validation_async(
         }
         
     except Exception as e:
-        validation.status = ValidationStatus.FAILED
-        validation.error_message = str(e)
-        validation.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        # Update validation on error with rollback recovery
+        try:
+            await db.rollback()
+            if validation is not None:
+                validation.status = ValidationStatus.FAILED
+                validation.error_message = _safe_error_message(e)
+                validation.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+        except Exception as db_err:
+            logger.error(f"Failed to persist privacy error state: {db_err}")
         
         try:
-            tracker.end_validation_run(status="error", error_message=str(e))
-        except:
+            if tracker is not None:
+                tracker.end_validation_run(status="error", error_message=_safe_error_message(e))
+        except Exception:
             pass
         
         raise
@@ -1443,7 +1530,7 @@ def run_all_validations_task(
                 self.update_state(state="PROGRESS", meta={"progress": 95, "step": "Finalizing results"})
 
                 fairness_passed  = results["validations"].get("fairness", {}).get("overall_passed", True)
-                transp_passed    = results["validations"].get("transparency", {}).get("status") in (None, "completed")
+                transp_passed    = results["validations"].get("transparency", {}).get("status") in (None, "completed", "skipped")
                 privacy_passed   = results["validations"].get("privacy", {}).get("overall_passed", True)
                 overall_passed   = fairness_passed and transp_passed and privacy_passed
 
@@ -1468,10 +1555,14 @@ def run_all_validations_task(
             except Exception as e:
                 logger.error(f"Validation suite failed: {str(e)}")
                 if suite is not None:
-                    suite.status = "failed"
-                    suite.error_message = str(e)
-                    suite.completed_at = datetime.now(timezone.utc)
-                    await db.commit()
+                    try:
+                        await db.rollback()
+                        suite.status = "failed"
+                        suite.error_message = _safe_error_message(e)
+                        suite.completed_at = datetime.now(timezone.utc)
+                        await db.commit()
+                    except Exception as db_err:
+                        logger.error(f"Failed to persist suite error state: {db_err}")
                 raise
 
     loop = asyncio.new_event_loop()

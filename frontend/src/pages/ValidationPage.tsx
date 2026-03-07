@@ -50,6 +50,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { modelsApi, datasetsApi, validationApi, requirementsApi, reportsApi, templatesApi } from '../services/api';
 import type { Template } from '../types';
+import FairnessMetricDetail from '../components/FairnessMetricDetail';
 
 // ─── Validator definitions ────────────────────────────────────────────────────
 interface ValidatorDef {
@@ -221,6 +222,7 @@ export default function ValidationPage() {
 
     // Warning dialog
     const [showWarningDialog, setShowWarningDialog] = useState(false);
+    const [selectedFairnessMetric, setSelectedFairnessMetric] = useState<any>(null);
 
     // Load existing suite when navigated via ?suite=
     useEffect(() => {
@@ -467,6 +469,10 @@ export default function ValidationPage() {
         setCurrentStep('Queuing validations…');
         setRunError('');
         try {
+            const effectiveSelectedValidators = selectedValidators.filter(
+                (v) => v !== 'transparency' || !!targetColumn
+            );
+
             // Dataset-predictions fairness mode: call the dedicated endpoint directly
             if (predictionMode === 'dataset' && selectedValidators.includes('fairness') && selectedValidators.length === 1) {
                 setCurrentStep('Running fairness from dataset predictions…');
@@ -502,7 +508,7 @@ export default function ValidationPage() {
             const response = await validationApi.runAll({
                 model_id: selectedModel,
                 dataset_id: selectedDataset,
-                selected_validations: selectedValidators,
+                selected_validations: effectiveSelectedValidators,
                 fairness_config: {
                     sensitive_feature: sensitiveFeature,
                     target_column: targetColumn || null,
@@ -1464,6 +1470,14 @@ export default function ValidationPage() {
                                                             <Typography variant="caption" color="text.secondary">
                                                                 {m.metric_value?.toFixed(3)} / {m.threshold}
                                                             </Typography>
+                                                            <Button
+                                                                size="small"
+                                                                variant="text"
+                                                                onClick={() => setSelectedFairnessMetric(m)}
+                                                                sx={{ minWidth: 'auto', px: 1 }}
+                                                            >
+                                                                Details
+                                                            </Button>
                                                             <PassChip passed={m.passed} />
                                                         </Box>
                                                     </Box>
@@ -1483,6 +1497,11 @@ export default function ValidationPage() {
                             {results.validations?.transparency && (
                                 <Card elevation={2} sx={{ border: '1px solid #2196f3' }}>
                                     <CardContent>
+                                        {results.validations.transparency.warning && (
+                                            <Alert severity="warning" sx={{ mb: 2 }}>
+                                                {results.validations.transparency.warning}. Upload a properly trained model with varying predictions and matching feature schema.
+                                            </Alert>
+                                        )}
                                         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1.5 }}>
                                             <TransparencyIcon sx={{ color: '#2196f3', fontSize: 32 }} />
                                             <Box sx={{ flex: 1 }}>
@@ -1722,6 +1741,12 @@ export default function ValidationPage() {
                         </Box>
                     </Box>
                 )}
+
+                <FairnessMetricDetail
+                    open={!!selectedFairnessMetric}
+                    onClose={() => setSelectedFairnessMetric(null)}
+                    metric={selectedFairnessMetric}
+                />
             </Container>
         </>
     );

@@ -1,0 +1,59 @@
+{
+  "generated_at": "2026-03-07T16:27:48.705390",
+  "models": {
+    "adult_income": {
+      "path": "C:\\Users\\Zain\\Desktop\\BS\\backend\\uploads\\models\\trained_benchmarks\\adult_income_model_20260307_162748.joblib",
+      "dataset": "C:\\Users\\Zain\\Desktop\\BS\\backend\\app\\datasets\\benchmark\\adult.csv",
+      "target": "income (ground truth)",
+      "features": [
+        "age",
+        "workclass",
+        "fnlwgt",
+        "education",
+        "educational-num",
+        "marital-status",
+        "occupation",
+        "relationship",
+        "race",
+        "gender",
+        "capital-gain",
+        "capital-loss",
+        "hours-per-week",
+        "native-country"
+      ],
+      "class_balance": {
+        "negative": 37155,
+        "positive": 11687
+      },
+      "metrics": {
+        "train_accuracy": 0.7987868860850204,
+        "test_accuracy": 0.7987511516020064
+      }
+    },
+    "german_credit_proxy": {
+      "path": "C:\\Users\\Zain\\Desktop\\BS\\backend\\uploads\\models\\trained_benchmarks\\german_credit_proxy_model_20260307_162748.joblib",
+      "dataset": "C:\\Users\\Zain\\Desktop\\BS\\backend\\app\\datasets\\benchmark\\german_credit_data.csv",
+      "target": "proxy_risk (derived; no ground-truth label in source CSV)",
+      "features": [
+        "Unnamed: 0",
+        "Age",
+        "Sex",
+        "Job",
+        "Housing",
+        "Saving accounts",
+        "Checking account",
+        "Credit amount",
+        "Duration",
+        "Purpose"
+      ],
+      "class_balance": {
+        "negative": 657,
+        "positive": 343
+      },
+      "metrics": {
+        "train_accuracy": 0.8225,
+        "test_accuracy": 0.835
+      }
+    }
+  }
+}

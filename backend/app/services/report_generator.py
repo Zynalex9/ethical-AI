@@ -141,11 +141,19 @@ class ReportGenerator:
             "model_card.json",
             {},
         )
-        sample_predictions = self._load_artifact_json(
+        sample_predictions_artifact = self._load_artifact_json(
             transparency_validation.mlflow_run_id if transparency_validation else None,
             "sample_predictions.json",
             {"samples": []},
-        ).get("samples", [])
+        )
+        sample_predictions = sample_predictions_artifact.get("samples", [])
+        transparency_warning = sample_predictions_artifact.get("warning")
+        if not transparency_warning:
+            transparency_warning = self._load_artifact_json(
+                transparency_validation.mlflow_run_id if transparency_validation else None,
+                "transparency_warning.json",
+                {},
+            ).get("warning")
 
         privacy_report = self._load_artifact_json(
             privacy_validation.mlflow_run_id if privacy_validation else None,
@@ -164,6 +172,7 @@ class ReportGenerator:
                 "feature_importance": transparency_data,
                 "model_card": model_card,
                 "sample_predictions": sample_predictions,
+                "warning": transparency_warning,
                 "mlflow_run_id": transparency_validation.mlflow_run_id if transparency_validation else None,
             },
             "privacy": {
@@ -261,62 +270,191 @@ class ReportGenerator:
         }
 
     def _simple_pdf_bytes(self, title: str, body_lines: List[str]) -> bytes:
-        # Minimal PDF generator with built-in Helvetica
+        """
+        Generate a readable PDF with proper text layout.
+        Creates a minimal PDF with correct positioning and line spacing.
+        """
         def esc(s: str) -> str:
+            """Escape special characters for PDF strings."""
             return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-        lines = [title] + body_lines
-        y_start = 760
-        content_parts = ["BT /F1 12 Tf 40 {} Td".format(y_start)]
-        first = True
-        for line in lines:
-            safe = esc(line[:110])
-            if first:
-                content_parts.append(f"({safe}) Tj")
-                first = False
-            else:
-                content_parts.append("T*")
-                content_parts.append(f"({safe}) Tj")
-        content_parts.append("ET")
+        
+        # PDF page dimensions (US Letter: 612x792 points)
+        page_width = 612
+        page_height = 792
+        margin_left = 50
+        margin_top = 50
+        line_height = 16  # Proper line spacing
+        font_size = 12
+        title_font_size = 16
+        
+        # Build text content with proper positioning
+        content_parts = []
+        y_position = page_height - margin_top
+        
+        # Title (larger font)
+        content_parts.append(f"BT")  # Begin text
+        content_parts.append(f"/F1 {title_font_size} Tf")  # Font and size
+        content_parts.append(f"{margin_left} {y_position} Td")  # Position
+        content_parts.append(f"({esc(title[:80])}) Tj")  # Draw title
+        content_parts.append("ET")  # End text
+        
+        y_position -= line_height * 2  # Add spacing after title
+        
+        # Body lines (regular font)
+        for line in body_lines:
+            if y_position < 50:  # Bottom margin check
+                break  # Would need multi-page support here
+            
+            # Wrap long lines
+            line_str = str(line)
+            if len(line_str) > 90:
+                line_str = line_str[:87] + "..."
+            
+            content_parts.append("BT")
+            content_parts.append(f"/F1 {font_size} Tf")
+            content_parts.append(f"{margin_left} {y_position} Td")
+            content_parts.append(f"({esc(line_str)}) Tj")
+            content_parts.append("ET")
+            
+            y_position -= line_height
+        
         content_stream = "\n".join(content_parts).encode("latin-1", errors="replace")
-
+        
+        # Build PDF structure
         objs: List[bytes] = []
-        objs.append(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n")
-        objs.append(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
-        objs.append(b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n")
-        objs.append(b"4 0 obj << /Length " + str(len(content_stream)).encode() + b" >> stream\n" + content_stream + b"\nendstream endobj\n")
-        objs.append(b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n")
-
+        
+        # Object 1: Catalog
+        objs.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+        
+        # Object 2: Pages
+        objs.append(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+        
+        # Object 3: Page
+        objs.append(
+            f"3 0 obj\n<< /Type /Page /Parent 2 0 R "
+            f"/MediaBox [0 0 {page_width} {page_height}] "
+            f"/Resources << /Font << /F1 5 0 R >> >> "
+            f"/Contents 4 0 R >>\nendobj\n".encode()
+        )
+        
+        # Object 4: Content stream
+        objs.append(
+            b"4 0 obj\n<< /Length " + str(len(content_stream)).encode() + 
+            b" >>\nstream\n" + content_stream + b"\nendstream\nendobj\n"
+        )
+        
+        # Object 5: Font
+        objs.append(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+        
+        # Assemble PDF
         pdf = b"%PDF-1.4\n"
         offsets = [0]
+        
         for obj in objs:
             offsets.append(len(pdf))
             pdf += obj
-
+        
+        # Cross-reference table
         xref_pos = len(pdf)
-        pdf += f"xref\n0 {len(objs)+1}\n".encode()
+        pdf += f"xref\n0 {len(objs) + 1}\n".encode()
         pdf += b"0000000000 65535 f \n"
         for off in offsets[1:]:
             pdf += f"{off:010d} 00000 n \n".encode()
-
-        pdf += f"trailer << /Size {len(objs)+1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode()
+        
+        # Trailer
+        pdf += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode()
+        
         return pdf
 
     async def generate_pdf_report(self, report_data: Dict[str, Any]) -> bytes:
+        """Generate a validation report PDF with proper formatting."""
         title = f"Validation Report - {report_data.get('project_name', 'Project')}"
+        
         lines = [
+            "",
             f"Model: {report_data.get('model_name', 'N/A')}",
             f"Dataset: {report_data.get('dataset_name', 'N/A')}",
+            f"Date: {report_data.get('validation_date', 'N/A')[:10] if report_data.get('validation_date') else 'N/A'}",
             f"Overall Status: {report_data.get('overall_status', 'N/A').upper()}",
             "",
-            "Executive Summary:",
-            report_data.get("executive_summary", "N/A"),
+            "=" * 70,
+            "EXECUTIVE SUMMARY",
+            "=" * 70,
             "",
-            "Recommendations:",
         ]
-        for rec in report_data.get("recommendations", []):
-            lines.append(f"- {rec}")
-
+        
+        # Add executive summary with line wrapping
+        summary = report_data.get("executive_summary", "N/A")
+        if len(summary) > 85:
+            # Simple word wrapping
+            words = summary.split()
+            current_line = ""
+            for word in words:
+                if len(current_line) + len(word) + 1 <= 85:
+                    current_line += (" " if current_line else "") + word
+                else:
+                    lines.append(current_line)
+                    current_line = word
+            if current_line:
+                lines.append(current_line)
+        else:
+            lines.append(summary)
+        
+        lines.extend([
+            "",
+            "=" * 70,
+            "VALIDATION RESULTS",
+            "=" * 70,
+            ""
+        ])
+        
+        # Add fairness results
+        validations = report_data.get("validations", {})
+        fairness = validations.get("fairness", {})
+        if fairness.get("status") == "completed":
+            lines.append("FAIRNESS:")
+            for result in fairness.get("results", [])[:10]:  # Limit to prevent overflow
+                status = "PASS" if result.get("passed") else "FAIL"
+                metric = result.get("metric_name", "unknown")
+                value = result.get("metric_value", 0)
+                lines.append(f"  {metric}: {value:.3f} [{status}]")
+            lines.append("")
+        
+        # Add transparency status
+        transparency = validations.get("transparency", {})
+        if transparency.get("status") == "completed":
+            lines.append("TRANSPARENCY: COMPLETED")
+            lines.append("")
+        
+        # Add privacy status
+        privacy = validations.get("privacy", {})
+        if privacy.get("status") == "completed":
+            passed = privacy.get("report", {}).get("overall_passed")
+            status = "PASS" if passed else "FAIL"
+            lines.append(f"PRIVACY: {status}")
+            lines.append("")
+        
+        lines.extend([
+            "=" * 70,
+            "RECOMMENDATIONS",
+            "=" * 70,
+            ""
+        ])
+        
+        for rec in report_data.get("recommendations", [])[:8]:  # Limit recommendations
+            # Wrap long recommendations
+            if len(rec) > 80:
+                lines.append(f"- {rec[:77]}...")
+            else:
+                lines.append(f"- {rec}")
+        
+        lines.extend([
+            "",
+            "=" * 70,
+            "End of Report",
+            "=" * 70
+        ])
+        
         return self._simple_pdf_bytes(title, lines)
 
     # ── Compliance Certificate PDF ──────────────────────────────────────
@@ -391,47 +529,73 @@ class ReportGenerator:
         privacy_status = _principle_status("privacy")
         accountability_status = "PASS" if validations.get("accountability") else "RECORDED"
 
-        # Build certificate body
+        # Build certificate body with proper formatting
         lines = [
             "",
-            "=" * 60,
-            "ETHICAL AI COMPLIANCE CERTIFICATE",
-            "=" * 60,
             "",
-            f"Project:    {project_name}",
-            f"Model:      {model_name}",
-            f"Dataset:    {dataset_name}",
-            f"Date:       {validation_date[:10] if len(validation_date) >= 10 else validation_date}",
+            "=" * 70,
+            "          ETHICAL AI COMPLIANCE CERTIFICATE",
+            "=" * 70,
             "",
-            "-" * 60,
-            f"OVERALL VERDICT:  {verdict}",
-            "-" * 60,
             "",
-            "Principle Scores:",
-            f"  Fairness           {fairness_status}",
-            f"  Transparency       {transparency_status}",
-            f"  Privacy            {privacy_status}",
-            f"  Accountability     {accountability_status}",
+            "PROJECT INFORMATION",
+            "-" * 70,
             "",
-            "-" * 60,
-            "Regulatory References Checked:",
-            "  - ECOA 80% Rule (Demographic Parity >= 0.80)",
-            "  - EEOC Four-Fifths Rule",
-            "  - GDPR / PII Detection",
-            "  - HIPAA Safe Harbor (if enabled)",
+            f"  Project:        {project_name[:50]}",
+            f"  Model:          {model_name[:50]}",
+            f"  Dataset:        {dataset_name[:50]}",
+            f"  Validation Date: {validation_date[:10] if len(validation_date) >= 10 else validation_date}",
             "",
-            "-" * 60,
-            "Recommendations:",
+            "",
+            "OVERALL VERDICT",
+            "-" * 70,
+            "",
+            f"       >>> {verdict} <<<",
+            "",
+            "",
+            "ETHICAL PRINCIPLE SCORES",
+            "-" * 70,
+            "",
+            f"  Fairness:           {fairness_status:>15}",
+            f"  Transparency:       {transparency_status:>15}",
+            f"  Privacy:            {privacy_status:>15}",
+            f"  Accountability:     {accountability_status:>15}",
+            "",
+            "",
+            "REGULATORY COMPLIANCE CHECKS",
+            "-" * 70,
+            "",
+            "  * ECOA 80% Rule (Demographic Parity >= 0.80)",
+            "  * EEOC Four-Fifths Rule",
+            "  * GDPR Privacy Requirements",
+            "  * PII Detection and Data Protection",
+            "  * HIPAA Safe Harbor (if enabled)",
+            "",
+            "",
+            "RECOMMENDATIONS",
+            "-" * 70,
+            "",
         ]
-        for rec in report.get("recommendations", []):
-            lines.append(f"  - {rec}")
-        lines += [
+        
+        # Add recommendations with proper formatting
+        for rec in report.get("recommendations", [])[:6]:  # Limit to 6 recommendations
+            if len(rec) > 65:
+                lines.append(f"  * {rec[:62]}...")
+            else:
+                lines.append(f"  * {rec}")
+        
+        lines.extend([
             "",
-            "=" * 60,
-            "This certificate was automatically generated by EthicScan AI.",
-            f"Suite ID: {validation_suite_id}",
-            "=" * 60,
-        ]
+            "",
+            "=" * 70,
+            "",
+            "  This certificate was automatically generated by",
+            "  EthicScan AI Validator",
+            "",
+            f"  Suite ID: {str(validation_suite_id)[:36]}",
+            "",
+            "=" * 70,
+        ])
 
         title = "COMPLIANCE CERTIFICATE"
         return self._simple_pdf_bytes(title, lines)

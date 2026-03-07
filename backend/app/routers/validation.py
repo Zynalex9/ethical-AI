@@ -314,14 +314,18 @@ async def run_fairness_validation(
         )
         
     except Exception as e:
-        # Update validation status on error
-        validation.status = ValidationStatus.FAILED
-        validation.error_message = str(e)
-        validation.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        # Update validation status on error with rollback recovery
+        try:
+            await db.rollback()
+            validation.status = ValidationStatus.FAILED
+            validation.error_message = str(e)[:2000]
+            validation.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        except Exception as db_err:
+            logger.error("Failed to persist fairness error state: %s", db_err)
         
         logger.error("Fairness validation failed: id=%s error=%s", validation.id, e)
-        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)[:500]}")
 
 
 @router.post("/fairness-from-predictions", response_model=FairnessResultResponse)
@@ -436,12 +440,16 @@ async def run_fairness_from_predictions(
         )
 
     except Exception as e:
-        validation.status = ValidationStatus.FAILED
-        validation.error_message = str(e)
-        validation.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        try:
+            await db.rollback()
+            validation.status = ValidationStatus.FAILED
+            validation.error_message = str(e)[:2000]
+            validation.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        except Exception as db_err:
+            logger.error("Failed to persist fairness-from-predictions error state: %s", db_err)
         logger.error("Fairness-from-predictions failed: id=%s error=%s", validation.id, e)
-        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)[:500]}")
 
 
 @router.post("/transparency", response_model=TransparencyResultResponse)
@@ -570,12 +578,16 @@ async def run_transparency_validation(
         )
         
     except Exception as e:
-        validation.status = ValidationStatus.FAILED
-        validation.error_message = str(e)
-        validation.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        try:
+            await db.rollback()
+            validation.status = ValidationStatus.FAILED
+            validation.error_message = str(e)[:2000]
+            validation.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        except Exception as db_err:
+            logger.error("Failed to persist transparency error state: %s", db_err)
         
-        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)[:500]}")
 
 
 @router.post("/privacy", response_model=PrivacyResultResponse)
@@ -712,12 +724,16 @@ async def run_privacy_validation(
     except HTTPException:
         raise
     except Exception as e:
-        validation.status = ValidationStatus.FAILED
-        validation.error_message = str(e)
-        validation.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+        try:
+            await db.rollback()
+            validation.status = ValidationStatus.FAILED
+            validation.error_message = str(e)[:2000]
+            validation.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        except Exception as db_err:
+            logger.error("Failed to persist privacy error state: %s", db_err)
         
-        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)[:500]}")
 
 
 @router.get("/{validation_id}", response_model=ValidationStatusResponse)
@@ -1132,6 +1148,7 @@ async def get_suite_results(
                             transparency_data["sample_predictions"] = t_vals.get("sample_predictions")
                             transparency_data["lime_explanations"] = t_vals.get("lime_explanations")
                             transparency_data["explanation_fidelity"] = t_vals.get("explanation_fidelity")
+                            transparency_data["warning"] = t_vals.get("warning")
                 except Exception:
                     pass  # Non-fatal – basic data still returned
 
@@ -1305,10 +1322,12 @@ async def get_transparency_details(
         model_card_path = os.path.join(artifact_base, "model_card.json")
         feature_importance_path = os.path.join(artifact_base, "feature_importance.json")
         sample_predictions_path = os.path.join(artifact_base, "sample_predictions.json")
+        transparency_warning_path = os.path.join(artifact_base, "transparency_warning.json")
         
         model_card = None
         feature_importance = {}
         sample_predictions = []
+        transparency_warning = None
         
         if os.path.exists(model_card_path):
             with open(model_card_path, 'r') as f:
@@ -1322,9 +1341,15 @@ async def get_transparency_details(
             with open(sample_predictions_path, 'r') as f:
                 sample_data = json.load(f)
                 sample_predictions = sample_data.get("samples", [])
+                transparency_warning = sample_data.get("warning")
                 logger.info(f"Loaded {len(sample_predictions)} sample predictions from {sample_predictions_path}")
         else:
             logger.warning(f"Sample predictions file not found: {sample_predictions_path}")
+
+        if not transparency_warning and os.path.exists(transparency_warning_path):
+            with open(transparency_warning_path, 'r') as f:
+                warning_data = json.load(f)
+                transparency_warning = warning_data.get("warning")
         
         # FIX: Provide better error message showing what artifacts were found vs missing
         if not model_card and not feature_importance:
@@ -1358,6 +1383,7 @@ async def get_transparency_details(
             "feature_importance": feature_importance,
             "model_card": model_card or {},
             "sample_predictions": sample_predictions,
+            "warning": transparency_warning,
             "completed_at": transparency_val.completed_at.isoformat() if transparency_val.completed_at else None
         }
     
