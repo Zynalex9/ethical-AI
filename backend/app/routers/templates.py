@@ -645,7 +645,205 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
             ],
         },
     },
+    {
+        "template_id": "FIN-FRAUD-01",
+        "name": "Finance Fraud Screening - Equitable Detection",
+        "description": "Fraud detection template balancing fraud catch rate with fairness across protected groups.",
+        "domain": "finance",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability"],
+            "reference": "Banking fraud model governance practices",
+            "recommended_datasets": ["bank_marketing", "german_credit"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Balanced fraud flag rates across groups"},
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.82, "principle": "fairness", "description": "Comparable false-positive and false-negative rates"},
+                {"metric": "shap_coverage", "operator": ">=", "value": 0.95, "principle": "transparency", "description": "Most alerts must have feature-level explanation"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "All alert decisions must be auditable"},
+            ],
+        },
+    },
+    {
+        "template_id": "FIN-INSURE-01",
+        "name": "Insurance Underwriting - Fair Access",
+        "description": "Template for underwriting and premium risk models with fairness and privacy safeguards.",
+        "domain": "finance",
+        "rules": {
+            "principles": ["fairness", "privacy", "transparency"],
+            "reference": "Insurance underwriting responsible AI guidance",
+            "recommended_datasets": ["german_credit", "adult_income"],
+            "items": [
+                {"metric": "disparate_impact_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Avoid adverse impact in underwriting outcomes"},
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Equal opportunity gap must remain small"},
+                {"metric": "k_anonymity", "operator": ">=", "value": 5, "principle": "privacy", "description": "Protected quasi-identifiers with k-anonymity"},
+                {"metric": "model_card_completeness", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "Model card required before release"},
+            ],
+        },
+    },
+    {
+        "template_id": "HC-TRIAGE-01",
+        "name": "Healthcare Triage - Clinical Equity",
+        "description": "Template for triage prioritization systems emphasizing equal access and explainability.",
+        "domain": "healthcare",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability"],
+            "reference": "Clinical safety and AI governance requirements",
+            "recommended_datasets": ["diabetes_readmission"],
+            "items": [
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.85, "principle": "fairness", "description": "Balanced triage errors across groups"},
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.03, "principle": "fairness", "description": "Sensitivity parity for critical cases"},
+                {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Each triage recommendation must be explainable"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Clinical overrides and model decisions must be logged"},
+            ],
+        },
+    },
+    {
+        "template_id": "HC-RESOURCE-01",
+        "name": "Healthcare Resource Allocation - Responsible Prioritization",
+        "description": "Template for capacity allocation models balancing fairness, privacy, and accountability.",
+        "domain": "healthcare",
+        "rules": {
+            "principles": ["fairness", "privacy", "accountability"],
+            "reference": "Hospital operational AI responsibility standards",
+            "recommended_datasets": ["diabetes_readmission"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Equitable allocation recommendations"},
+                {"metric": "disparate_impact_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "No severe disparate impact"},
+                {"metric": "pii_without_consent", "operator": "==", "value": 0, "principle": "privacy", "description": "No unauthorized personal data usage"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "All allocation decisions must be traceable"},
+            ],
+        },
+    },
+    {
+        "template_id": "EMP-PROMOTION-01",
+        "name": "Employment Promotion - Opportunity Equity",
+        "description": "Template for promotion and internal mobility models with equal-opportunity controls.",
+        "domain": "employment",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability"],
+            "reference": "Workplace AI governance and anti-discrimination standards",
+            "recommended_datasets": ["adult_income"],
+            "items": [
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.04, "principle": "fairness", "description": "Promotion opportunity gaps must be controlled"},
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Maintain balanced promotion rates"},
+                {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Employees receive decision rationale"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Promotion decisions and appeals are fully logged"},
+            ],
+        },
+    },
+    {
+        "template_id": "EDU-RETENTION-01",
+        "name": "Education Retention - Early Support Fairness",
+        "description": "Template for student retention-risk models to ensure equitable support targeting.",
+        "domain": "education",
+        "rules": {
+            "principles": ["fairness", "transparency", "privacy"],
+            "reference": "Educational equity and learner data protections",
+            "recommended_datasets": ["adult_income"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.78, "principle": "fairness", "description": "Balanced support recommendations"},
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Comparable model errors by student group"},
+                {"metric": "shap_coverage", "operator": ">=", "value": 0.95, "principle": "transparency", "description": "Risk factors should be explainable"},
+                {"metric": "k_anonymity", "operator": ">=", "value": 5, "principle": "privacy", "description": "Protect student quasi-identifiers"},
+            ],
+        },
+    },
+    {
+        "template_id": "CJ-PAROLE-01",
+        "name": "Criminal Justice Parole Review - Fair Risk Assessment",
+        "description": "Template for parole recommendation systems with strict parity and auditability constraints.",
+        "domain": "criminal_justice",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability"],
+            "reference": "Justice-sector risk assessment accountability standards",
+            "recommended_datasets": ["compas"],
+            "items": [
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.86, "principle": "fairness", "description": "Parity in false-positive and false-negative rates"},
+                {"metric": "disparate_impact_ratio", "operator": ">=", "value": 0.82, "principle": "fairness", "description": "Limit disparate impact by protected group"},
+                {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Decision explanation required for each recommendation"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Complete traceability for model-aided parole decisions"},
+            ],
+        },
+    },
+    {
+        "template_id": "GEN-RETAIL-01",
+        "name": "Retail Personalization - Responsible Ranking",
+        "description": "Template for recommendation and ranking systems with fairness and transparency safeguards.",
+        "domain": "general",
+        "rules": {
+            "principles": ["fairness", "transparency", "privacy"],
+            "reference": "Consumer-facing AI responsible personalization guidance",
+            "recommended_datasets": ["bank_marketing", "adult_income"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Balanced recommendation exposure"},
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Opportunity gaps must remain bounded"},
+                {"metric": "model_card_completeness", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "Model card and limitations must be documented"},
+                {"metric": "pii_without_consent", "operator": "==", "value": 0, "principle": "privacy", "description": "No unauthorized personal data use in ranking"},
+            ],
+        },
+    },
+    {
+        "template_id": "GOV-CASEWORK-01",
+        "name": "Public Casework Prioritization - Transparent Decisions",
+        "description": "Template for public-service case prioritization with fairness and appeal-readiness controls.",
+        "domain": "general",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability", "privacy"],
+            "reference": "Public administration AI transparency and accountability standards",
+            "recommended_datasets": ["adult_income", "bank_marketing"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Fair case prioritization rates"},
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Balanced error rates across groups"},
+                {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Case ranking explanation for operators"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Every model-assisted action must be auditable"},
+                {"metric": "k_anonymity", "operator": ">=", "value": 5, "principle": "privacy", "description": "Protect quasi-identifiers in operational exports"},
+            ],
+        },
+    },
 ]
+
+
+_BASELINE_RULES_BY_PRINCIPLE: Dict[str, List[Dict[str, Any]]] = {
+    "fairness": [
+        {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Baseline demographic parity threshold"},
+        {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Baseline equalized odds threshold"},
+        {"metric": "disparate_impact_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Baseline disparate impact threshold"},
+        {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Baseline equal opportunity gap threshold"},
+    ],
+    "transparency": [
+        {"metric": "shap_coverage", "operator": ">=", "value": 0.95, "principle": "transparency", "description": "SHAP explanations for most predictions"},
+        {"metric": "model_card_completeness", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "Model card must be complete"},
+        {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Decision explanations required"},
+    ],
+    "privacy": [
+        {"metric": "pii_without_consent", "operator": "==", "value": 0, "principle": "privacy", "description": "No unsupported PII processing"},
+        {"metric": "k_anonymity", "operator": ">=", "value": 5, "principle": "privacy", "description": "k-anonymity baseline"},
+        {"metric": "l_diversity", "operator": ">=", "value": 2, "principle": "privacy", "description": "l-diversity baseline"},
+    ],
+    "accountability": [
+        {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Audit trail must exist"},
+        {"metric": "mlflow_run_logged", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Validation runs must be logged"},
+    ],
+}
+
+
+def _enrich_template_rules(rules: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure every template includes a useful minimum baseline of rules by principle."""
+    principles = [p.lower() for p in (rules.get("principles") or [])]
+    items: List[Dict[str, Any]] = list(rules.get("items") or [])
+    existing_metrics = {str(item.get("metric", "")).lower() for item in items}
+
+    for principle in principles:
+        baseline_rules = _BASELINE_RULES_BY_PRINCIPLE.get(principle, [])
+        for base_rule in baseline_rules:
+            metric = str(base_rule.get("metric", "")).lower()
+            if metric and metric not in existing_metrics:
+                items.append(dict(base_rule))
+                existing_metrics.add(metric)
+
+    return {
+        **rules,
+        "items": items,
+    }
 
 
 @router.post("/seed-defaults", status_code=status.HTTP_201_CREATED)
@@ -665,6 +863,8 @@ async def _seed_templates(db: AsyncSession) -> Dict[str, Any]:
     updated_count = 0
 
     for t_data in DOMAIN_TEMPLATES:
+        enriched_rules = _enrich_template_rules(t_data["rules"])
+
         result = await db.execute(
             select(Template).where(Template.template_id == t_data["template_id"])
         )
@@ -677,7 +877,7 @@ async def _seed_templates(db: AsyncSession) -> Dict[str, Any]:
                 name=t_data["name"],
                 description=t_data["description"],
                 domain=t_data["domain"],
-                rules=t_data["rules"],
+                rules=enriched_rules,
                 version=1,
                 is_active=True,
             )
@@ -685,11 +885,11 @@ async def _seed_templates(db: AsyncSession) -> Dict[str, Any]:
             created_count += 1
         else:
             # Update existing template if version changed
-            if existing.rules != t_data["rules"] or existing.name != t_data["name"]:
+            if existing.rules != enriched_rules or existing.name != t_data["name"]:
                 existing.name = t_data["name"]
                 existing.description = t_data["description"]
                 existing.domain = t_data["domain"]
-                existing.rules = t_data["rules"]
+                existing.rules = enriched_rules
                 existing.version = (existing.version or 1) + 1
                 updated_count += 1
 

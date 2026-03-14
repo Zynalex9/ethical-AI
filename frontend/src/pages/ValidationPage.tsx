@@ -46,6 +46,7 @@ import {
     CheckBox as CheckBoxIcon,
     CheckBoxOutlineBlank as CheckBoxBlankIcon,
     ArrowForward as NextIcon,
+    Lock as LockIcon,
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import { modelsApi, datasetsApi, validationApi, requirementsApi, reportsApi, templatesApi } from '../services/api';
@@ -700,7 +701,18 @@ export default function ValidationPage() {
                                         </MenuItem>
                                         {templates.map((tpl) => (
                                             <MenuItem key={tpl.id} value={tpl.id}>
-                                                {tpl.name}
+                                                <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                                                    <Typography variant="body2" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                        {tpl.name}
+                                                    </Typography>
+                                                    <Chip
+                                                        size="small"
+                                                        label={`${tpl.rules?.items?.length ?? 0}`}
+                                                        variant="outlined"
+                                                        color="primary"
+                                                        sx={{ minWidth: 36, justifyContent: 'center' }}
+                                                    />
+                                                </Box>
                                             </MenuItem>
                                         ))}
                                     </Select>
@@ -730,7 +742,7 @@ export default function ValidationPage() {
                                             bgcolor: isSelected ? v.bgColor : 'background.paper',
                                             transition: 'all 0.2s ease',
                                             cursor: isTemplatePresetActive ? 'not-allowed' : 'pointer',
-                                            opacity: isTemplatePresetActive ? 0.75 : 1,
+                                            opacity: 1,
                                             '&:hover': { borderColor: v.borderColor, boxShadow: 4 },
                                         }}
                                     >
@@ -748,13 +760,53 @@ export default function ValidationPage() {
                                             <Typography variant="h6" sx={{ fontWeight: 700, color: v.color, lineHeight: 1.2 }}>
                                                                 {v.label}
                                                             </Typography>
-                                                            <Typography variant="body2" color="text.secondary">{v.shortDesc}</Typography>
+                                                            <Typography
+                                                                variant="body2"
+                                                                sx={{ color: isSelected ? 'rgba(12, 20, 28, 0.86)' : 'text.secondary' }}
+                                                            >
+                                                                {v.shortDesc}
+                                                            </Typography>
                                                             <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
                                                                 {v.requiresModel && (
-                                                                    <Chip label="Needs model" size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+                                                                    <Chip
+                                                                        label="Needs model"
+                                                                        size="small"
+                                                                        variant="outlined"
+                                                                        sx={{
+                                                                            fontSize: '0.65rem',
+                                                                            height: 18,
+                                                                            color: isSelected ? 'rgba(12, 20, 28, 0.78)' : 'text.secondary',
+                                                                            borderColor: isSelected ? 'rgba(12, 20, 28, 0.28)' : 'divider',
+                                                                        }}
+                                                                    />
                                                                 )}
                                                                 {v.requiresSensitiveFeature && (
-                                                                    <Chip label="Sensitive column" size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+                                                                    <Chip
+                                                                        label="Sensitive column"
+                                                                        size="small"
+                                                                        variant="outlined"
+                                                                        sx={{
+                                                                            fontSize: '0.65rem',
+                                                                            height: 18,
+                                                                            color: isSelected ? 'rgba(12, 20, 28, 0.78)' : 'text.secondary',
+                                                                            borderColor: isSelected ? 'rgba(12, 20, 28, 0.28)' : 'divider',
+                                                                        }}
+                                                                    />
+                                                                )}
+                                                                {isTemplatePresetActive && (
+                                                                    <Chip
+                                                                        icon={<LockIcon sx={{ fontSize: 12 }} />}
+                                                                        label="Locked by template"
+                                                                        size="small"
+                                                                        color="default"
+                                                                        variant="outlined"
+                                                                        sx={{
+                                                                            fontSize: '0.65rem',
+                                                                            height: 18,
+                                                                            color: isSelected ? 'rgba(12, 20, 28, 0.78)' : 'text.secondary',
+                                                                            borderColor: isSelected ? 'rgba(12, 20, 28, 0.28)' : 'divider',
+                                                                        }}
+                                                                    />
                                                                 )}
                                                             </Box>
                                                         </Box>
@@ -762,7 +814,14 @@ export default function ValidationPage() {
                                                     {isExpanded && (
                                                         <Typography
                                                             variant="body2"
-                                                            sx={{ mt: 1.5, color: 'text.secondary', lineHeight: 1.65, borderTop: '1px solid', borderColor: 'divider', pt: 1.5 }}
+                                                            sx={{
+                                                                mt: 1.5,
+                                                                color: isSelected ? 'rgba(12, 20, 28, 0.78)' : 'text.secondary',
+                                                                lineHeight: 1.65,
+                                                                borderTop: '1px solid',
+                                                                borderColor: isSelected ? 'rgba(12, 20, 28, 0.18)' : 'divider',
+                                                                pt: 1.5,
+                                                            }}
                                                         >
                                                             {v.longDesc}
                                                         </Typography>
@@ -773,7 +832,12 @@ export default function ValidationPage() {
                                                     <IconButton
                                                         size="small"
                                                         onClick={(e) => { e.stopPropagation(); setExpandedValidator(isExpanded ? null : v.key); }}
-                                                        sx={{ color: isExpanded ? v.color : 'text.disabled', flexShrink: 0 }}
+                                                        sx={{
+                                                            color: isExpanded
+                                                                ? v.color
+                                                                : (isSelected ? 'rgba(12, 20, 28, 0.58)' : 'text.disabled'),
+                                                            flexShrink: 0,
+                                                        }}
                                                     >
                                                         <InfoIcon fontSize="small" />
                                                     </IconButton>
