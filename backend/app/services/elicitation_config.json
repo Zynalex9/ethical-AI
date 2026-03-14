@@ -1,0 +1,52 @@
+{
+  "modes": {
+    "strict": {
+      "imbalance_threshold": 0.2,
+      "disparate_impact_threshold": 0.9,
+      "dataset_feature_count_threshold": 10,
+      "model_feature_count_threshold": 8,
+      "prediction_imbalance_threshold": 0.2
+    },
+    "normal": {
+      "imbalance_threshold": 0.3,
+      "disparate_impact_threshold": 0.8,
+      "dataset_feature_count_threshold": 15,
+      "model_feature_count_threshold": 10,
+      "prediction_imbalance_threshold": 0.3
+    },
+    "lenient": {
+      "imbalance_threshold": 0.4,
+      "disparate_impact_threshold": 0.7,
+      "dataset_feature_count_threshold": 20,
+      "model_feature_count_threshold": 14,
+      "prediction_imbalance_threshold": 0.4
+    }
+  },
+  "default_specs": {
+    "fairness": {
+      "rules": [
+        { "metric": "demographic_parity_ratio", "operator": ">=", "value": 0.8 },
+        { "metric": "equalized_odds_ratio", "operator": ">=", "value": 0.8 },
+        { "metric": "disparate_impact_ratio", "operator": ">=", "value": 0.8 }
+      ]
+    },
+    "transparency": {
+      "rules": [
+        { "metric": "shap_explanation_coverage", "operator": ">=", "value": 1.0 },
+        { "metric": "model_card_generated", "operator": "==", "value": 1.0 }
+      ]
+    },
+    "privacy": {
+      "rules": [
+        { "metric": "k_anonymity_k", "operator": ">=", "value": 5 },
+        { "metric": "pii_columns_detected", "operator": "==", "value": 0 }
+      ]
+    },
+    "accountability": {
+      "rules": [
+        { "metric": "audit_trail_exists", "operator": "==", "value": 1.0 },
+        { "metric": "mlflow_run_logged", "operator": "==", "value": 1.0 }
+      ]
+    }
+  }
+}

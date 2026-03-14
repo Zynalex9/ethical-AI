@@ -63,12 +63,14 @@ SUPPORTED_RULE_METRICS: Dict[str, set[str]] = {
 class ElicitFromDatasetRequest(BaseModel):
     dataset_id: UUID
     project_id: UUID
+    mode: Optional[str] = "normal"
 
 
 class ElicitFromModelRequest(BaseModel):
     model_id: UUID
     dataset_id: UUID
     project_id: UUID
+    mode: Optional[str] = "normal"
 
 
 class ElicitedRequirementSuggestion(BaseModel):
@@ -81,6 +83,21 @@ class ElicitedRequirementSuggestion(BaseModel):
     elicitation_reason: str
     confidence_score: float
     status: str = "draft"
+
+
+class ElicitationCheck(BaseModel):
+    check_id: str
+    status: str
+    reason: str
+    value: Optional[Any] = None
+    threshold: Optional[Any] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ElicitationResponse(BaseModel):
+    mode: str
+    suggestions: List[ElicitedRequirementSuggestion]
+    evaluated_checks: List[ElicitationCheck]
 
 
 class AcceptElicitedRequest(BaseModel):
@@ -192,7 +209,7 @@ def _validate_specification_rules(principle: str, specification: Dict[str, Any])
 
 # ── endpoints ────────────────────────────────────────────────────────────────
 
-@router.post("/elicit-from-dataset", response_model=List[ElicitedRequirementSuggestion])
+@router.post("/elicit-from-dataset", response_model=ElicitationResponse)
 async def elicit_from_dataset(
     body: ElicitFromDatasetRequest,
     db: AsyncSession = Depends(get_db),
@@ -206,7 +223,7 @@ async def elicit_from_dataset(
     await _get_project_or_403(body.project_id, current_user, db)
     elicitor = RequirementElicitor()
     try:
-        suggestions = await elicitor.elicit_from_dataset(body.dataset_id, db)
+        response = await elicitor.elicit_from_dataset(body.dataset_id, db, mode=body.mode)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except Exception as exc:
@@ -215,10 +232,10 @@ async def elicit_from_dataset(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Elicitation error: {exc}",
         )
-    return suggestions
+    return response
 
 
-@router.post("/elicit-from-model", response_model=List[ElicitedRequirementSuggestion])
+@router.post("/elicit-from-model", response_model=ElicitationResponse)
 async def elicit_from_model(
     body: ElicitFromModelRequest,
     db: AsyncSession = Depends(get_db),
@@ -231,8 +248,8 @@ async def elicit_from_model(
     await _get_project_or_403(body.project_id, current_user, db)
     elicitor = RequirementElicitor()
     try:
-        suggestions = await elicitor.elicit_from_model_and_dataset(
-            body.model_id, body.dataset_id, db
+        response = await elicitor.elicit_from_model_and_dataset(
+            body.model_id, body.dataset_id, db, mode=body.mode
         )
     except ElicitationFeatureMismatchError as exc:
         raise HTTPException(
@@ -249,7 +266,7 @@ async def elicit_from_model(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Elicitation error: {exc}",
         )
-    return suggestions
+    return response
 
 
 @router.post("/accept-elicited", response_model=RequirementResponse, status_code=status.HTTP_201_CREATED)

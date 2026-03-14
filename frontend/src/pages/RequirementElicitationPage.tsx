@@ -40,6 +40,7 @@ import {
     NavigateNext as NavNextIcon,
 } from '@mui/icons-material';
 import { datasetsApi, modelsApi, requirementsApi } from '../services/api';
+import type { ElicitationCheck } from '../services/api';
 import RequirementCard, { type Requirement } from '../components/requirements/RequirementCard';
 import RequirementForm from '../components/requirements/RequirementForm';
 
@@ -70,10 +71,13 @@ export default function RequirementElicitationPage() {
     const [selectedDataset,  setSelectedDataset]  = useState('');
     const [selectedModel,    setSelectedModel]    = useState('');
     const [modelDataset,     setModelDataset]     = useState('');
+    const [elicitationMode,  setElicitationMode]  = useState<'strict' | 'normal' | 'lenient'>('normal');
 
     // Suggestions from elicitor
     const [datasetSuggestions, setDatasetSuggestions] = useState<Suggestion[]>([]);
     const [modelSuggestions,   setModelSuggestions]   = useState<Suggestion[]>([]);
+    const [datasetChecks,      setDatasetChecks]      = useState<ElicitationCheck[]>([]);
+    const [modelChecks,        setModelChecks]        = useState<ElicitationCheck[]>([]);
     const [dismissedIds,       setDismissedIds]        = useState<Set<string>>(new Set());
 
     // Elicitation loading
@@ -141,14 +145,16 @@ export default function RequirementElicitationPage() {
             const res = await requirementsApi.elicitFromDataset({
                 dataset_id: selectedDataset,
                 project_id: projectId!,
+                mode: elicitationMode,
             });
-            setDatasetSuggestions(res.map((s: any) => ({ ...s, isSuggestion: true })));
-            if (res.length === 0) {
+            setDatasetSuggestions(res.suggestions.map((s: any) => ({ ...s, isSuggestion: true })));
+            setDatasetChecks(res.evaluated_checks ?? []);
+            if (res.suggestions.length === 0) {
                 setElicitInfo(
                     'Dataset analysis completed, but no new requirement suggestions were detected for the current data profile.'
                 );
             } else {
-                setElicitInfo(`Dataset analysis generated ${res.length} suggestion${res.length === 1 ? '' : 's'}.`);
+                setElicitInfo(`Dataset analysis generated ${res.suggestions.length} suggestion${res.suggestions.length === 1 ? '' : 's'} in ${res.mode} mode.`);
             }
         } catch (err: any) {
             setElicitError(err.response?.data?.detail ?? 'Dataset analysis failed');
@@ -167,15 +173,17 @@ export default function RequirementElicitationPage() {
                 model_id:   selectedModel,
                 dataset_id: modelDataset,
                 project_id: projectId!,
+                mode: elicitationMode,
             });
-            setModelSuggestions(res.map((s: any) => ({ ...s, isSuggestion: true })));
-            if (res.length === 0) {
+            setModelSuggestions(res.suggestions.map((s: any) => ({ ...s, isSuggestion: true })));
+            setModelChecks(res.evaluated_checks ?? []);
+            if (res.suggestions.length === 0) {
                 setElicitInfo(
                     'Model behaviour analysis completed successfully, but no additional requirement suggestions were triggered. '
                     + 'This can happen when the current checks do not detect imbalance, disparate impact, or feature-risk conditions.'
                 );
             } else {
-                setElicitInfo(`Model analysis generated ${res.length} suggestion${res.length === 1 ? '' : 's'}.`);
+                setElicitInfo(`Model analysis generated ${res.suggestions.length} suggestion${res.suggestions.length === 1 ? '' : 's'} in ${res.mode} mode.`);
             }
         } catch (err: any) {
             setElicitError(err.response?.data?.detail ?? 'Model analysis failed');
@@ -281,6 +289,26 @@ export default function RequirementElicitationPage() {
             </Collapse>
 
             <Grid container spacing={3} sx={{ mt: 0 }} columns={{ xs: 12, md: 12 }}>
+                <Grid size={{ xs: 12 }}>
+                    <Paper variant="outlined" sx={{ p: 2 }}>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                            Elicitation Mode
+                        </Typography>
+                        <FormControl size="small" sx={{ minWidth: 220 }}>
+                            <InputLabel>Mode</InputLabel>
+                            <Select
+                                value={elicitationMode}
+                                label="Mode"
+                                onChange={(e) => setElicitationMode(e.target.value as 'strict' | 'normal' | 'lenient')}
+                            >
+                                <MenuItem value="strict">Strict (more sensitive)</MenuItem>
+                                <MenuItem value="normal">Normal</MenuItem>
+                                <MenuItem value="lenient">Lenient (fewer triggers)</MenuItem>
+                            </Select>
+                        </FormControl>
+                    </Paper>
+                </Grid>
+
                 {/* ── Dataset Analysis ─────────────────────────────────────── */}
                 <Grid size={{ xs: 12, md: 6 }}>
                     <Paper variant="outlined" sx={{ p: 2.5 }}>
@@ -377,6 +405,77 @@ export default function RequirementElicitationPage() {
                     </Paper>
                 </Grid>
             </Grid>
+
+            {(datasetChecks.length > 0 || modelChecks.length > 0) && (
+                <Box sx={{ mt: 3 }}>
+                    <Paper variant="outlined" sx={{ p: 2 }}>
+                        <Typography variant="h6" sx={{ mb: 2 }}>
+                            Elicitation Check Transparency
+                        </Typography>
+
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                            <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                                Status legend:
+                            </Typography>
+                            <Chip size="small" label="triggered" color="success" variant="outlined" />
+                            <Chip size="small" label="not_triggered" color="warning" variant="outlined" />
+                            <Chip size="small" label="skipped" color="default" variant="outlined" />
+                            <Chip size="small" label="failed" color="error" variant="outlined" />
+                        </Box>
+
+                        <Table size="small">
+                            <TableHead>
+                                <TableRow>
+                                    <TableCell sx={{ fontWeight: 600 }}>Check</TableCell>
+                                    <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
+                                    <TableCell sx={{ fontWeight: 600 }}>Value</TableCell>
+                                    <TableCell sx={{ fontWeight: 600 }}>Threshold</TableCell>
+                                    <TableCell sx={{ fontWeight: 600 }}>Reason</TableCell>
+                                </TableRow>
+                            </TableHead>
+                            <TableBody>
+                                {[...datasetChecks, ...modelChecks].map((check, idx) => (
+                                    <TableRow key={`${check.check_id}-${idx}`}>
+                                        <TableCell>
+                                            <Typography variant="body2">{check.check_id}</Typography>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Chip
+                                                size="small"
+                                                label={check.status}
+                                                color={
+                                                    check.status === 'triggered'
+                                                        ? 'success'
+                                                        : check.status === 'failed'
+                                                            ? 'error'
+                                                            : check.status === 'skipped'
+                                                                ? 'default'
+                                                                : 'warning'
+                                                }
+                                            />
+                                        </TableCell>
+                                        <TableCell>
+                                            <Typography variant="caption" color="text.secondary">
+                                                {check.value !== undefined && check.value !== null ? String(check.value) : '-'}
+                                            </Typography>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Typography variant="caption" color="text.secondary">
+                                                {check.threshold !== undefined && check.threshold !== null ? String(check.threshold) : '-'}
+                                            </Typography>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Typography variant="caption" color="text.secondary">
+                                                {check.reason}
+                                            </Typography>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </Paper>
+                </Box>
+            )}
 
             {/* ── Suggestions Section ──────────────────────────────────────── */}
             {allSuggestions.length > 0 && (

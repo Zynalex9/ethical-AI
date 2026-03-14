@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+import json
+from pathlib import Path
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Literal
 from uuid import UUID
 
 import numpy as np
@@ -31,6 +34,9 @@ logger = logging.getLogger(__name__)
 class ElicitationFeatureMismatchError(Exception):
     """Raised when dataset features are incompatible with the selected model."""
 
+
+ElicitationMode = Literal["strict", "normal", "lenient"]
+
 # ─── PII column-name signals (mirrors privacy_validator.py) ─────────────────
 _PII_SIGNALS = [
     "name", "email", "phone", "ssn", "social", "address", "zip", "postcode",
@@ -38,34 +44,12 @@ _PII_SIGNALS = [
     "ip", "mac", "gender", "race", "religion", "nationality", "ethnicity",
 ]
 
-# ─── Default threshold specs per principle ──────────────────────────────────
-_DEFAULT_SPECS: Dict[str, Dict[str, Any]] = {
-    "fairness": {
-        "rules": [
-            {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.8},
-            {"metric": "equalized_odds_ratio",     "operator": ">=", "value": 0.8},
-            {"metric": "disparate_impact_ratio",   "operator": ">=", "value": 0.8},
-        ]
-    },
-    "transparency": {
-        "rules": [
-            {"metric": "shap_explanation_coverage", "operator": ">=", "value": 1.0},
-            {"metric": "model_card_generated",      "operator": "==", "value": 1.0},
-        ]
-    },
-    "privacy": {
-        "rules": [
-            {"metric": "k_anonymity_k",   "operator": ">=", "value": 5},
-            {"metric": "pii_columns_detected", "operator": "==", "value": 0},
-        ]
-    },
-    "accountability": {
-        "rules": [
-            {"metric": "audit_trail_exists", "operator": "==", "value": 1.0},
-            {"metric": "mlflow_run_logged",  "operator": "==", "value": 1.0},
-        ]
-    },
-}
+@lru_cache(maxsize=1)
+def _load_elicitation_config() -> Dict[str, Any]:
+    """Load elicitation thresholds/specs from JSON config."""
+    config_path = Path(__file__).with_name("elicitation_config.json")
+    with config_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 class RequirementElicitor:
@@ -77,6 +61,31 @@ class RequirementElicitor:
     """
 
     # ── helpers ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_mode(mode: Optional[str]) -> ElicitationMode:
+        if mode in ("strict", "normal", "lenient"):
+            return mode
+        return "normal"
+
+    @staticmethod
+    def _check_result(
+        *,
+        check_id: str,
+        status: str,
+        reason: str,
+        value: Optional[Any] = None,
+        threshold: Optional[Any] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "check_id": check_id,
+            "status": status,
+            "value": value,
+            "threshold": threshold,
+            "reason": reason,
+            "metadata": metadata or {},
+        }
 
     @staticmethod
     def _load_dataframe(file_path: str) -> pd.DataFrame:
@@ -163,7 +172,8 @@ class RequirementElicitor:
         self,
         dataset_id: UUID,
         db: AsyncSession,
-    ) -> List[Dict[str, Any]]:
+        mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Analyse a dataset and return a list of auto-generated requirement dicts.
 
@@ -179,12 +189,24 @@ class RequirementElicitor:
         if dataset is None:
             raise ValueError(f"Dataset {dataset_id} not found")
 
+        resolved_mode = self._resolve_mode(mode)
+        config = _load_elicitation_config()
+        mode_thresholds = config["modes"][resolved_mode]
+
         df = self._load_dataframe(dataset.file_path)
         requirements: List[Dict[str, Any]] = []
+        checks: List[Dict[str, Any]] = []
 
         # 1. PII detection → privacy
         pii_cols = self._detect_pii_columns(df)
         if pii_cols:
+            checks.append(self._check_result(
+                check_id="dataset_pii_detection",
+                status="triggered",
+                value=len(pii_cols),
+                reason=f"Detected potential PII columns: {', '.join(pii_cols)}",
+                metadata={"pii_columns": pii_cols},
+            ))
             requirements.append(self._make_requirement(
                 principle="privacy",
                 name=f"Privacy Protection — {dataset.name}",
@@ -198,19 +220,48 @@ class RequirementElicitor:
                 ),
                 confidence=0.90,
                 spec_overrides={"pii_columns": pii_cols},
+                config=config,
+            ))
+        else:
+            checks.append(self._check_result(
+                check_id="dataset_pii_detection",
+                status="not_triggered",
+                value=0,
+                reason="No PII-like column names detected.",
             ))
 
         # 2. Sensitive attribute imbalance → fairness
         sensitive_attrs = dataset.sensitive_attributes or []
+        if not sensitive_attrs:
+            checks.append(self._check_result(
+                check_id="dataset_sensitive_attributes_available",
+                status="skipped",
+                reason="Dataset has no configured sensitive attributes.",
+            ))
+
         for attr in sensitive_attrs[:3]:   # Check up to 3 sensitive attrs
             if attr not in df.columns:
+                checks.append(self._check_result(
+                    check_id=f"dataset_sensitive_attr_{attr}",
+                    status="skipped",
+                    reason=f"Sensitive attribute '{attr}' is not present in dataset columns.",
+                ))
                 continue
             imbalance = self.calculate_imbalance_ratio(df[attr])
-            if imbalance > 0.30:
+            threshold = float(mode_thresholds["imbalance_threshold"])
+            if imbalance > threshold:
                 proxies = self.detect_proxy_variables(df, attr)
                 proxy_msg = (
                     f"  Proxy variables detected: {proxies}." if proxies else ""
                 )
+                checks.append(self._check_result(
+                    check_id=f"dataset_imbalance_{attr}",
+                    status="triggered",
+                    value=round(imbalance, 4),
+                    threshold=threshold,
+                    reason=f"Imbalance {imbalance:.2f} exceeded threshold {threshold:.2f} for '{attr}'.",
+                    metadata={"proxy_variables": proxies},
+                ))
                 requirements.append(self._make_requirement(
                     principle="fairness",
                     name=f"Fairness — Demographic Parity on '{attr}'",
@@ -221,14 +272,31 @@ class RequirementElicitor:
                         f"Equalized Odds Ratio ≥ 0.80 across groups.{proxy_msg}"
                     ),
                     reason=(
-                        f"Imbalance ratio {imbalance:.2f} > 0.30 for sensitive attribute '{attr}'."
+                        f"Imbalance ratio {imbalance:.2f} > {threshold:.2f} for sensitive attribute '{attr}'."
                         + (f" Proxy variables: {proxies}." if proxies else "")
                     ),
                     confidence=min(0.95, 0.60 + imbalance),
+                    config=config,
+                ))
+            else:
+                checks.append(self._check_result(
+                    check_id=f"dataset_imbalance_{attr}",
+                    status="not_triggered",
+                    value=round(imbalance, 4),
+                    threshold=threshold,
+                    reason=f"Imbalance {imbalance:.2f} is within threshold {threshold:.2f} for '{attr}'.",
                 ))
 
         # 3. High feature count → transparency
-        if df.shape[1] > 15:
+        feature_count_threshold = int(mode_thresholds["dataset_feature_count_threshold"])
+        if df.shape[1] > feature_count_threshold:
+            checks.append(self._check_result(
+                check_id="dataset_feature_count",
+                status="triggered",
+                value=int(df.shape[1]),
+                threshold=feature_count_threshold,
+                reason=f"Feature count {df.shape[1]} exceeded threshold {feature_count_threshold}.",
+            ))
             requirements.append(self._make_requirement(
                 principle="transparency",
                 name=f"Transparency — Explainability for {df.shape[1]}-Feature Model",
@@ -238,11 +306,25 @@ class RequirementElicitor:
                     "SHAP global feature importance and per-prediction LIME explanations "
                     "are required, along with a Model Card."
                 ),
-                reason=f"Feature count {df.shape[1]} > 15 threshold.",
+                reason=f"Feature count {df.shape[1]} > {feature_count_threshold} threshold.",
                 confidence=0.80,
+                config=config,
+            ))
+        else:
+            checks.append(self._check_result(
+                check_id="dataset_feature_count",
+                status="not_triggered",
+                value=int(df.shape[1]),
+                threshold=feature_count_threshold,
+                reason=f"Feature count {df.shape[1]} is within threshold {feature_count_threshold}.",
             ))
 
         # 4. Accountability — always recommend
+        checks.append(self._check_result(
+            check_id="dataset_accountability_baseline",
+            status="triggered",
+            reason="Baseline accountability recommendation is always added.",
+        ))
         requirements.append(self._make_requirement(
             principle="accountability",
             name=f"Accountability — Audit Trail for '{dataset.name}'",
@@ -253,19 +335,26 @@ class RequirementElicitor:
             ),
             reason="Accountability is a fundamental requirement for all AI deployments.",
             confidence=1.0,
+            config=config,
         ))
 
         logger.info(
-            "Elicited %d requirements from dataset %s", len(requirements), dataset_id
+            "Elicited %d requirements from dataset %s using mode=%s",
+            len(requirements), dataset_id, resolved_mode,
         )
-        return requirements
+        return {
+            "mode": resolved_mode,
+            "suggestions": requirements,
+            "evaluated_checks": checks,
+        }
 
     async def elicit_from_model_and_dataset(
         self,
         model_id: UUID,
         dataset_id: UUID,
         db: AsyncSession,
-    ) -> List[Dict[str, Any]]:
+        mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Run the model on the dataset and generate behaviour-based requirements.
 
@@ -285,8 +374,13 @@ class RequirementElicitor:
         if dataset_obj is None:
             raise ValueError(f"Dataset {dataset_id} not found")
 
+        resolved_mode = self._resolve_mode(mode)
+        config = _load_elicitation_config()
+        mode_thresholds = config["modes"][resolved_mode]
+
         df = self._load_dataframe(dataset_obj.file_path)
         requirements: List[Dict[str, Any]] = []
+        checks: List[Dict[str, Any]] = []
 
         # Load model
         try:
@@ -294,7 +388,7 @@ class RequirementElicitor:
             model = loader.load(model_obj.file_path)
         except Exception as exc:
             logger.warning("Could not load model for elicitation: %s", exc)
-            return requirements
+            raise ValueError(f"Could not load model for elicitation: {exc}") from exc
 
         # Prepare features (drop target if known)
         target = dataset_obj.target_column
@@ -309,7 +403,16 @@ class RequirementElicitor:
 
         if X.empty or len(X) == 0:
             logger.warning("No features after preprocessing — skipping model elicitation")
-            return requirements
+            checks.append(self._check_result(
+                check_id="model_feature_matrix_non_empty",
+                status="not_triggered",
+                reason="No features left after preprocessing.",
+            ))
+            return {
+                "mode": resolved_mode,
+                "suggestions": requirements,
+                "evaluated_checks": checks,
+            }
 
         logger.debug(
             "Elicitation feature matrix: %d rows × %d cols (model expects features from training)",
@@ -318,11 +421,25 @@ class RequirementElicitor:
 
         expected_n_features = self._get_expected_feature_count(model)
         if expected_n_features is not None and X.shape[1] != expected_n_features:
+            checks.append(self._check_result(
+                check_id="model_feature_compatibility",
+                status="failed",
+                value=int(X.shape[1]),
+                threshold=int(expected_n_features),
+                reason="Dataset feature count does not match model expected feature count.",
+            ))
             raise ElicitationFeatureMismatchError(
                 "Model and dataset feature mismatch: "
                 f"model expects {expected_n_features} features, dataset provides {X.shape[1]} features. "
                 "Please use the same dataset schema used during training (same columns and preprocessing)."
             )
+        checks.append(self._check_result(
+            check_id="model_feature_compatibility",
+            status="triggered",
+            value=int(X.shape[1]),
+            threshold=int(expected_n_features) if expected_n_features is not None else None,
+            reason="Feature compatibility check passed.",
+        ))
 
         try:
             preds = model.predict(X.values)
@@ -349,7 +466,15 @@ class RequirementElicitor:
             rates = counts / counts.sum()
             min_rate, max_rate = float(rates.min()), float(rates.max())
             imbalance = max_rate - min_rate
-            if imbalance > 0.30:
+            imbalance_threshold = float(mode_thresholds["prediction_imbalance_threshold"])
+            if imbalance > imbalance_threshold:
+                checks.append(self._check_result(
+                    check_id="model_prediction_imbalance",
+                    status="triggered",
+                    value=round(imbalance, 4),
+                    threshold=imbalance_threshold,
+                    reason=f"Prediction imbalance {imbalance:.2f} exceeded threshold {imbalance_threshold:.2f}.",
+                ))
                 requirements.append(self._make_requirement(
                     principle="fairness",
                     name="Fairness — Prediction Imbalance Detected",
@@ -358,13 +483,33 @@ class RequirementElicitor:
                         f"{', '.join(f'{u}→{r:.1%}' for u, r in zip(unique, rates))}. "
                         "Demographic Parity and Equalized Odds metrics must be validated."
                     ),
-                    reason=f"Prediction imbalance {imbalance:.2f} > 0.30.",
+                    reason=f"Prediction imbalance {imbalance:.2f} > {imbalance_threshold:.2f}.",
                     confidence=min(0.92, 0.65 + imbalance),
+                    config=config,
                 ))
+            else:
+                checks.append(self._check_result(
+                    check_id="model_prediction_imbalance",
+                    status="not_triggered",
+                    value=round(imbalance, 4),
+                    threshold=imbalance_threshold,
+                    reason=f"Prediction imbalance {imbalance:.2f} is within threshold {imbalance_threshold:.2f}.",
+                ))
+        else:
+            checks.append(self._check_result(
+                check_id="model_prediction_imbalance",
+                status="skipped",
+                reason="Predictions contain fewer than 2 classes, imbalance check skipped.",
+            ))
 
         # 2. Disparate impact per sensitive attribute
         for attr in sensitive_attrs[:3]:
             if attr not in df.columns:
+                checks.append(self._check_result(
+                    check_id=f"model_disparate_impact_{attr}",
+                    status="skipped",
+                    reason=f"Sensitive attribute '{attr}' not found in dataset.",
+                ))
                 continue
             groups = df[attr].dropna().unique()
             if len(groups) < 2:
@@ -382,23 +527,58 @@ class RequirementElicitor:
             if len(group_rates) >= 2:
                 r_vals = list(group_rates.values())
                 di = min(r_vals) / max(r_vals) if max(r_vals) > 0 else 1.0
-                if di < 0.80:
+                di_threshold = float(mode_thresholds["disparate_impact_threshold"])
+                if di < di_threshold:
                     rates_str = ", ".join(f"{k}={v:.1%}" for k, v in group_rates.items())
+                    checks.append(self._check_result(
+                        check_id=f"model_disparate_impact_{attr}",
+                        status="triggered",
+                        value=round(di, 4),
+                        threshold=di_threshold,
+                        reason=f"Disparate impact {di:.3f} is below threshold {di_threshold:.2f} for '{attr}'.",
+                        metadata={"group_positive_rates": group_rates},
+                    ))
                     requirements.append(self._make_requirement(
                         principle="fairness",
                         name=f"Fairness — Disparate Impact on '{attr}'",
                         description=(
                             f"Predicted positive rates: {rates_str}. "
-                            f"Disparate Impact Ratio = {di:.3f} (< 0.80 threshold). "
+                            f"Disparate Impact Ratio = {di:.3f} (< {di_threshold:.2f} threshold). "
                             "The model may discriminate against certain groups."
                         ),
-                        reason=f"Disparate Impact {di:.3f} < 0.80 for attribute '{attr}'.",
+                        reason=f"Disparate Impact {di:.3f} < {di_threshold:.2f} for attribute '{attr}'.",
                         confidence=min(0.95, 0.80 + (0.80 - di)),
+                        config=config,
                     ))
+                else:
+                    checks.append(self._check_result(
+                        check_id=f"model_disparate_impact_{attr}",
+                        status="not_triggered",
+                        value=round(di, 4),
+                        threshold=di_threshold,
+                        reason=f"Disparate impact {di:.3f} is within threshold {di_threshold:.2f} for '{attr}'.",
+                        metadata={"group_positive_rates": group_rates},
+                    ))
+            else:
+                checks.append(self._check_result(
+                    check_id=f"model_disparate_impact_{attr}",
+                    status="skipped",
+                    reason=f"Could not compute disparate impact for '{attr}' (insufficient group data).",
+                ))
 
         # 3. Feature count → transparency
         n_features = X.shape[1]
-        if n_features > 10:
+        model_feature_count_threshold = int(mode_thresholds["model_feature_count_threshold"])
+        if n_features > model_feature_count_threshold:
+            checks.append(self._check_result(
+                check_id="model_feature_count",
+                status="triggered",
+                value=n_features,
+                threshold=model_feature_count_threshold,
+                reason=(
+                    f"Model inference used {n_features} features, exceeding threshold {model_feature_count_threshold}."
+                ),
+            ))
             requirements.append(self._make_requirement(
                 principle="transparency",
                 name=f"Transparency — {n_features}-Feature Model Explainability",
@@ -407,12 +587,28 @@ class RequirementElicitor:
                     "SHAP values and LIME explanations are mandatory to ensure "
                     "decision-makers can understand individual predictions."
                 ),
-                reason=f"Model feature count {n_features} > 10.",
+                reason=f"Model feature count {n_features} > {model_feature_count_threshold}.",
                 confidence=0.85,
+                config=config,
+            ))
+        else:
+            checks.append(self._check_result(
+                check_id="model_feature_count",
+                status="not_triggered",
+                value=n_features,
+                threshold=model_feature_count_threshold,
+                reason=(
+                    f"Model inference used {n_features} features, within threshold {model_feature_count_threshold}."
+                ),
             ))
 
         # 4. No triggered findings → add explicit baseline recommendation
         if not requirements:
+            checks.append(self._check_result(
+                check_id="model_baseline_monitoring",
+                status="triggered",
+                reason="No high-risk checks triggered; baseline monitoring recommendation added.",
+            ))
             requirements.append(self._make_requirement(
                 principle="accountability",
                 name="Baseline Monitoring — No Immediate Model Risks Triggered",
@@ -433,13 +629,18 @@ class RequirementElicitor:
                     ],
                     "elicitation_outcome": "no_risk_triggers",
                 },
+                config=config,
             ))
 
         logger.info(
-            "Elicited %d requirements from model+dataset (%s / %s)",
-            len(requirements), model_id, dataset_id,
+            "Elicited %d requirements from model+dataset (%s / %s) using mode=%s",
+            len(requirements), model_id, dataset_id, resolved_mode,
         )
-        return requirements
+        return {
+            "mode": resolved_mode,
+            "suggestions": requirements,
+            "evaluated_checks": checks,
+        }
 
     # ── internal factory ─────────────────────────────────────────────────────
 
@@ -452,9 +653,11 @@ class RequirementElicitor:
         reason: str,
         confidence: float,
         spec_overrides: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build a requirement dict from elicitation findings."""
-        spec = dict(_DEFAULT_SPECS.get(principle, {"rules": []}))
+        loaded_config = config or _load_elicitation_config()
+        spec = dict(loaded_config.get("default_specs", {}).get(principle, {"rules": []}))
         if spec_overrides:
             spec.update(spec_overrides)
         return {

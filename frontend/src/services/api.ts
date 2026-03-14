@@ -301,6 +301,30 @@ export const validationApi = {
 };
 
 // Requirements API
+export interface ElicitationCheck {
+    check_id: string;
+    status: string;
+    reason: string;
+    value?: any;
+    threshold?: any;
+    metadata?: Record<string, any>;
+}
+
+export interface ElicitationResponse {
+    mode: string;
+    suggestions: Array<{
+        name: string;
+        principle: string;
+        description: string;
+        specification: Record<string, any>;
+        elicited_automatically: boolean;
+        elicitation_reason: string;
+        confidence_score: number;
+        status: string;
+    }>;
+    evaluated_checks: ElicitationCheck[];
+}
+
 export const requirementsApi = {
     listByProject: async (projectId: string) => {
         const response = await api.get(`/requirements/project/${projectId}`);
@@ -334,14 +358,14 @@ export const requirementsApi = {
         return response.data;
     },
 
-    elicitFromDataset: async (data: { dataset_id: string; project_id: string }) => {
+    elicitFromDataset: async (data: { dataset_id: string; project_id: string; mode?: 'strict' | 'normal' | 'lenient' }) => {
         const response = await api.post('/requirements/elicit-from-dataset', data);
-        return response.data;
+        return response.data as ElicitationResponse;
     },
 
-    elicitFromModel: async (data: { model_id: string; dataset_id: string; project_id: string }) => {
+    elicitFromModel: async (data: { model_id: string; dataset_id: string; project_id: string; mode?: 'strict' | 'normal' | 'lenient' }) => {
         const response = await api.post('/requirements/elicit-from-model', data);
-        return response.data;
+        return response.data as ElicitationResponse;
     },
 
     acceptElicited: async (data: {
