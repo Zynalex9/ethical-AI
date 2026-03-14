@@ -306,6 +306,9 @@ export default function TraceabilityMatrix({ traces, loading, onViewRootCause }:
 
     const filtered = useMemo(() => {
         return traces.filter((t) => {
+            // Only show definitive outcomes in UI.
+            if (t.status !== 'pass' && t.status !== 'fail') return false;
+
             // Principle filter
             if (principleFilter !== 'all') {
                 const p = t.requirement?.principle ?? t.unlinked_principle ?? '';
@@ -395,11 +398,9 @@ export default function TraceabilityMatrix({ traces, loading, onViewRootCause }:
                         label="Status"
                         onChange={(e) => setStatusFilter(e.target.value)}
                     >
-                        <MenuItem value="all">All Statuses</MenuItem>
+                        <MenuItem value="all">Pass + Fail</MenuItem>
                         <MenuItem value="pass">Pass</MenuItem>
                         <MenuItem value="fail">Fail</MenuItem>
-                        <MenuItem value="not_validated">Not Validated</MenuItem>
-                        <MenuItem value="unknown">Unknown</MenuItem>
                     </Select>
                 </FormControl>
                 <TextField

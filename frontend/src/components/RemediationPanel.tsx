@@ -40,6 +40,14 @@ const principleColors: Record<string, 'primary' | 'secondary' | 'warning' | 'inf
     accountability: 'secondary',
 };
 
+const normalizeDocLink = (docLink?: string | null): string | null => {
+    if (!docLink) return null;
+    if (docLink.startsWith('/docs')) {
+        return docLink.replace('/docs', '/knowledge-base');
+    }
+    return docLink;
+};
+
 export default function RemediationPanel({ suiteId }: Props) {
     const queryClient = useQueryClient();
 
@@ -70,14 +78,14 @@ export default function RemediationPanel({ suiteId }: Props) {
                 <CardContent sx={{ textAlign: 'center', py: 4 }}>
                     <ChecklistIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
                     <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-                        No remediation checklists generated yet
+                        No remediation items are required for the current failed metrics.
                     </Typography>
                     <Button
                         variant="contained"
                         onClick={() => generateMutation.mutate()}
                         disabled={generateMutation.isPending}
                     >
-                        Generate Remediation Checklists
+                        Generate / Refresh From Latest Results
                     </Button>
                 </CardContent>
             </Card>
@@ -124,7 +132,9 @@ export default function RemediationPanel({ suiteId }: Props) {
                         </AccordionSummary>
                         <AccordionDetails sx={{ pt: 0 }}>
                             <List dense disablePadding>
-                                {cl.steps.map((step) => (
+                                {cl.steps.map((step) => {
+                                    const resolvedDocLink = normalizeDocLink(step.doc_link);
+                                    return (
                                     <ListItem
                                         key={step.id}
                                         disablePadding
@@ -152,15 +162,16 @@ export default function RemediationPanel({ suiteId }: Props) {
                                                 sx: { textDecoration: step.done ? 'line-through' : 'none' },
                                             }}
                                             secondary={
-                                                step.doc_link ? (
-                                                    <Link href={step.doc_link} target="_blank" rel="noopener" variant="caption">
+                                                resolvedDocLink ? (
+                                                    <Link href={resolvedDocLink} target="_blank" rel="noopener" variant="caption">
                                                         Documentation
                                                     </Link>
                                                 ) : undefined
                                             }
                                         />
                                     </ListItem>
-                                ))}
+                                    );
+                                })}
                             </List>
                         </AccordionDetails>
                     </Accordion>

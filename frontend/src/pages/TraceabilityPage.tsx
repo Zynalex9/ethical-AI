@@ -216,6 +216,10 @@ function ByRequirementTab({ projectId }: { projectId: string }) {
         enabled: !!selectedReq,
     });
 
+    const passFailHistory = (history?.history || []).filter(
+        (h: any) => h?.overall_passed === true || h?.overall_passed === false
+    );
+
     return (
         <Box>
             <FormControl fullWidth sx={{ mb: 3 }}>
@@ -235,19 +239,19 @@ function ByRequirementTab({ projectId }: { projectId: string }) {
 
             {isLoading && <LinearProgress />}
 
-            {history && history.history?.length > 0 ? (
+            {history && passFailHistory.length > 0 ? (
                 <Box>
                     <Typography variant="subtitle1" gutterBottom fontWeight={600}>
                         <HistoryIcon fontSize="small" sx={{ mr: 0.5, verticalAlign: 'middle' }} />
                         Compliance History — {history.requirement_name}
                     </Typography>
-                    {history.history.map((h: any) => (
+                    {passFailHistory.map((h: any) => (
                         <Paper key={h.validation_id} variant="outlined" sx={{ p: 2, mb: 1 }}>
                             <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                                 <Chip
                                     size="small"
-                                    label={h.overall_passed ? 'Pass' : h.overall_passed === false ? 'Fail' : 'Unknown'}
-                                    color={h.overall_passed ? 'success' : h.overall_passed === false ? 'error' : 'default'}
+                                    label={h.overall_passed ? 'Pass' : 'Fail'}
+                                    color={h.overall_passed ? 'success' : 'error'}
                                 />
                                 <Typography variant="body2">
                                     Model: {h.model_name} | Dataset: {h.dataset_name}
