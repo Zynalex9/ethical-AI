@@ -1,20 +1,19 @@
 """
 Benchmark Dataset Seeding Service.
 
-This service loads pre-configured benchmark datasets (COMPAS, Adult Income, German Credit)
-into projects with proper metadata and sensitive attribute configuration.
+This service loads pre-configured benchmark datasets into projects with
+proper metadata and sensitive attribute configuration.
 """
 
-import os
 import shutil
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
 from uuid import UUID
 import logging
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.models.dataset import Dataset
 from app.models.project import Project
@@ -62,6 +61,26 @@ class BenchmarkDatasetSeeder:
             "key_features": ["duration", "credit_amount", "installment_rate", "property", "existing_credits"],
             "domain": "finance",
             "reference": "UCI Machine Learning Repository - Statlog German Credit"
+        },
+        "bank_marketing": {
+            "name": "Bank Marketing",
+            "description": "Portuguese bank telemarketing dataset used to predict subscription to term deposits and analyze fairness in financial outreach models.",
+            "filename": "bank_marketing.csv",
+            "target_column": "y",
+            "sensitive_attributes": ["age", "marital", "education"],
+            "key_features": ["job", "balance", "housing", "loan", "campaign"],
+            "domain": "finance",
+            "reference": "UCI Bank Marketing Dataset"
+        },
+        "diabetes_readmission": {
+            "name": "Diabetes Readmission",
+            "description": "Hospital readmission dataset for diabetic patients used to evaluate healthcare prediction fairness and transparency.",
+            "filename": "diabetes_130_us_hospitals.csv",
+            "target_column": "readmitted",
+            "sensitive_attributes": ["race", "gender", "age"],
+            "key_features": ["time_in_hospital", "num_lab_procedures", "num_medications", "number_diagnoses"],
+            "domain": "healthcare",
+            "reference": "UCI Diabetes 130-US Hospitals Dataset"
         }
     }
     
@@ -70,11 +89,9 @@ class BenchmarkDatasetSeeder:
         # Get the path to benchmark datasets
         current_file = Path(__file__)
         self.benchmark_dir = current_file.parent.parent / "datasets" / "benchmark"
-        
-        if not self.benchmark_dir.exists():
-            raise FileNotFoundError(
-                f"Benchmark dataset directory not found: {self.benchmark_dir}"
-            )
+
+        # Create the directory so availability endpoints work even before files are added.
+        self.benchmark_dir.mkdir(parents=True, exist_ok=True)
     
     async def seed_benchmark_datasets(
         self,
@@ -88,7 +105,7 @@ class BenchmarkDatasetSeeder:
         
         Args:
             project_id: Target project UUID
-            dataset_key: Key identifying the benchmark dataset ("compas", "adult_income", "german_credit")
+            dataset_key: Key identifying the benchmark dataset (for example: "compas", "adult_income", "german_credit", "bank_marketing", "diabetes_readmission")
             db: Database session
             user_id: User performing the operation
             
@@ -108,6 +125,18 @@ class BenchmarkDatasetSeeder:
         
         # Get dataset metadata
         metadata = self.BENCHMARK_DATASETS[dataset_key]
+
+        # Prevent duplicate dataset names in the same project.
+        existing_dataset_result = await db.execute(
+            select(Dataset.id).where(
+                Dataset.project_id == project_id,
+                func.lower(Dataset.name) == metadata["name"].lower(),
+            )
+        )
+        if existing_dataset_result.scalar_one_or_none() is not None:
+            raise ValueError(
+                f"Dataset with name '{metadata['name']}' already exists in this project"
+            )
         
         # Verify project exists
         result = await db.execute(
@@ -123,7 +152,10 @@ class BenchmarkDatasetSeeder:
         # Load and profile the dataset
         source_path = self.benchmark_dir / metadata["filename"]
         if not source_path.exists():
-            raise FileNotFoundError(f"Dataset file not found: {source_path}")
+            raise FileNotFoundError(
+                f"Dataset file not found: {source_path}. "
+                f"Expected filename: {metadata['filename']}"
+            )
         
         # Read dataset to get profiling information
         df = pd.read_csv(source_path)
@@ -226,7 +258,30 @@ class BenchmarkDatasetSeeder:
         Returns:
             Dictionary mapping dataset keys to metadata
         """
-        return self.BENCHMARK_DATASETS.copy()
+        datasets: Dict[str, Dict] = {}
+        for key, metadata in self.BENCHMARK_DATASETS.items():
+            expected_path = self.benchmark_dir / metadata["filename"]
+            datasets[key] = {
+                **metadata,
+                "file_exists": expected_path.exists(),
+                "expected_path": str(expected_path),
+            }
+        return datasets
+
+    def get_required_dataset_files(self) -> List[Dict[str, str]]:
+        """
+        Return expected benchmark dataset files and target locations.
+        """
+        required_files: List[Dict[str, str]] = []
+        for key, metadata in self.BENCHMARK_DATASETS.items():
+            required_files.append(
+                {
+                    "dataset_key": key,
+                    "filename": metadata["filename"],
+                    "expected_path": str(self.benchmark_dir / metadata["filename"]),
+                }
+            )
+        return required_files
     
     def _profile_dataset(self, df: pd.DataFrame) -> Dict:
         """

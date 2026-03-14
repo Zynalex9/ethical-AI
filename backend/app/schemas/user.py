@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 from app.models.user import UserRole
 
@@ -14,23 +14,8 @@ from app.models.user import UserRole
 class UserCreate(BaseModel):
     """Schema for user registration."""
     email: EmailStr
-    password: str = Field(..., min_length=8, max_length=100)
+    password: str = Field(..., min_length=6)
     name: str = Field(..., min_length=2, max_length=100)
-
-    @field_validator("password")
-    @classmethod
-    def password_complexity(cls, v: str) -> str:
-        """Enforce password complexity: upper, lower, digit, and special char."""
-        import re
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("Password must contain at least one uppercase letter")
-        if not re.search(r"[a-z]", v):
-            raise ValueError("Password must contain at least one lowercase letter")
-        if not re.search(r"\d", v):
-            raise ValueError("Password must contain at least one digit")
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=\[\]\\;'/`~]", v):
-            raise ValueError("Password must contain at least one special character")
-        return v
     
 
 class UserLogin(BaseModel):
@@ -42,7 +27,7 @@ class UserLogin(BaseModel):
 class UserUpdate(BaseModel):
     """Schema for updating user profile."""
     name: Optional[str] = Field(None, min_length=2, max_length=100)
-    password: Optional[str] = Field(None, min_length=8, max_length=100)
+    password: Optional[str] = Field(None, min_length=6)
 
 
 class UserResponse(BaseModel):

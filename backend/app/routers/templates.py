@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from ..database import get_db
 from ..dependencies import get_current_user
+from ..models.dataset import Dataset
 from ..models.user import User
 from ..models.template import Template, TemplateDomain
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
@@ -178,6 +179,11 @@ async def apply_template_to_project(
     current_user: User = Depends(get_current_user),
 ):
     """Apply a template (optionally customised) to a project, creating requirements."""
+    template_result = await db.execute(select(Template).where(Template.id == body.template_id))
+    template = template_result.scalar_one_or_none()
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+
     try:
         created = await TemplateLibrary.apply_template_to_project(
             db=db,
@@ -189,18 +195,33 @@ async def apply_template_to_project(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    benchmark_result = await _auto_load_template_benchmark_datasets(
+        db=db,
+        template=template,
+        project_id=body.project_id,
+        user_id=current_user.id,
+    )
+
     audit = AuditLog(
         user_id=current_user.id,
         action=AuditAction.TEMPLATE_CREATE,
         resource_type=ResourceType.TEMPLATE,
         resource_id=body.template_id,
-        details={"action": "apply_to_project", "project_id": str(body.project_id), "requirements_created": len(created)},
+        details={
+            "action": "apply_to_project",
+            "project_id": str(body.project_id),
+            "requirements_created": len(created),
+            "datasets_loaded": benchmark_result["loaded"],
+            "datasets_skipped_existing": benchmark_result["skipped_existing"],
+            "datasets_missing_files": benchmark_result["missing_files"],
+        },
     )
     db.add(audit)
     await db.commit()
 
     return {
         "message": f"Created {len(created)} requirements from template",
+        "benchmark_datasets": benchmark_result,
         "requirements": [
             {
                 "id": str(r.id),
@@ -211,6 +232,76 @@ async def apply_template_to_project(
             }
             for r in created
         ],
+    }
+
+
+async def _auto_load_template_benchmark_datasets(
+    db: AsyncSession,
+    template: Template,
+    project_id: UUID,
+    user_id: UUID,
+) -> Dict[str, Any]:
+    """Load benchmark datasets recommended by a template if files are present."""
+    recommended_keys = (template.rules or {}).get("recommended_datasets", [])
+    if not recommended_keys:
+        return {
+            "recommended": [],
+            "loaded": [],
+            "skipped_existing": [],
+            "missing_files": [],
+            "failed": [],
+        }
+
+    from ..services.dataset_seeder import BenchmarkDatasetSeeder
+
+    seeder = BenchmarkDatasetSeeder()
+    existing_result = await db.execute(
+        select(Dataset.name).where(Dataset.project_id == project_id)
+    )
+    existing_dataset_names = {name for (name,) in existing_result.all()}
+
+    loaded: List[str] = []
+    skipped_existing: List[str] = []
+    missing_files: List[str] = []
+    failed: List[str] = []
+
+    for dataset_key in recommended_keys:
+        metadata = seeder.BENCHMARK_DATASETS.get(dataset_key)
+        if metadata is None:
+            failed.append(f"Unknown dataset key: {dataset_key}")
+            continue
+
+        dataset_name = metadata["name"]
+        if dataset_name in existing_dataset_names:
+            skipped_existing.append(dataset_key)
+            continue
+
+        try:
+            dataset = await seeder.seed_benchmark_datasets(
+                project_id=project_id,
+                dataset_key=dataset_key,
+                db=db,
+                user_id=user_id,
+            )
+            loaded.append(dataset.name)
+            existing_dataset_names.add(dataset_name)
+        except FileNotFoundError:
+            missing_files.append(metadata["filename"])
+        except Exception as exc:
+            logger.warning(
+                "Failed auto-loading benchmark dataset '%s' for template '%s': %s",
+                dataset_key,
+                template.template_id,
+                str(exc),
+            )
+            failed.append(f"{dataset_key}: {str(exc)}")
+
+    return {
+        "recommended": recommended_keys,
+        "loaded": loaded,
+        "skipped_existing": skipped_existing,
+        "missing_files": missing_files,
+        "failed": failed,
     }
 
 
@@ -261,6 +352,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["fairness"],
             "reference": "General best practices",
+            "recommended_datasets": ["adult_income", "german_credit"],
             "items": [
                 {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Demographic parity ratio"},
                 {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Equalized odds ratio"},
@@ -275,6 +367,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["transparency"],
             "reference": "General best practices",
+            "recommended_datasets": ["adult_income"],
             "items": [
                 {"metric": "shap_coverage", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "Full SHAP coverage"},
             ],
@@ -288,6 +381,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["privacy"],
             "reference": "General best practices",
+            "recommended_datasets": ["adult_income", "diabetes_readmission"],
             "items": [
                 {"metric": "pii_count", "operator": "==", "value": 0, "principle": "privacy", "description": "Zero PII columns allowed"},
             ],
@@ -306,6 +400,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["fairness"],
             "reference": "Equal Credit Opportunity Act (ECOA), Fair Housing Act",
+            "recommended_datasets": ["german_credit", "bank_marketing"],
             "items": [
                 {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "80 % rule for demographic parity"},
                 {"metric": "disparate_impact_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Disparate impact ratio ≥ 0.80"},
@@ -325,6 +420,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["fairness", "transparency"],
             "reference": "HIPAA, FDA guidelines for AI/ML in medical devices",
+            "recommended_datasets": ["diabetes_readmission"],
             "items": [
                 {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.03, "principle": "fairness", "description": "Very strict – healthcare critical"},
                 {"metric": "shap_coverage", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "100 % SHAP coverage – every prediction explainable"},
@@ -344,6 +440,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["fairness", "accountability"],
             "reference": "ProPublica COMPAS analysis standards",
+            "recommended_datasets": ["compas"],
             "items": [
                 {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.85, "principle": "fairness", "description": "Equal TPR and FPR across races"},
                 {"metric": "calibration_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Calibration within ±5 % across groups"},
@@ -363,6 +460,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["fairness"],
             "reference": "EEOC Uniform Guidelines on Employee Selection",
+            "recommended_datasets": ["adult_income"],
             "items": [
                 {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Demographic parity ≥ 0.80"},
                 {"metric": "four_fifths_rule", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Four-fifths rule compliance"},
@@ -382,6 +480,7 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["privacy", "transparency"],
             "reference": "GDPR Article 22 (automated decision-making)",
+            "recommended_datasets": ["adult_income", "bank_marketing"],
             "items": [
                 {"metric": "pii_without_consent", "operator": "==", "value": 0, "principle": "privacy", "description": "No PII without consent"},
                 {"metric": "shap_coverage", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "Right to explanation (SHAP required)"},
@@ -401,10 +500,148 @@ DOMAIN_TEMPLATES: List[Dict[str, Any]] = [
         "rules": {
             "principles": ["fairness", "transparency"],
             "reference": "Title VI of Civil Rights Act",
+            "recommended_datasets": ["adult_income"],
             "items": [
                 {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.75, "principle": "fairness", "description": "Demographic parity ≥ 0.75"},
                 {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Equal opportunity difference ≤ 0.05"},
                 {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Explanation required for rejections"},
+            ],
+        },
+    },
+    # ── Rich catalogue additions ─────────────────────────────────────
+    {
+        "template_id": "FIN-RISK-01",
+        "name": "Finance Risk Scoring - Balanced Fairness",
+        "description": "Balanced fairness and transparency controls for retail credit scoring and risk ranking systems.",
+        "domain": "finance",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability"],
+            "reference": "ECOA, Basel model governance guidance",
+            "recommended_datasets": ["german_credit", "bank_marketing"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.82, "principle": "fairness", "description": "Selection parity across protected groups"},
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.04, "principle": "fairness", "description": "Close true-positive parity for approvals"},
+                {"metric": "shap_coverage", "operator": ">=", "value": 0.95, "principle": "transparency", "description": "Explain most scored decisions"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Persist full model decision audit trail"},
+            ],
+        },
+    },
+    {
+        "template_id": "FIN-AML-01",
+        "name": "Finance AML Monitoring - Bias Guardrails",
+        "description": "Template for anti-money-laundering alert prioritization with fairness guardrails and robust governance.",
+        "domain": "finance",
+        "rules": {
+            "principles": ["fairness", "accountability"],
+            "reference": "FATF risk-based supervision best practices",
+            "recommended_datasets": ["bank_marketing", "adult_income"],
+            "items": [
+                {"metric": "false_positive_rate_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Cap disparity in false positives"},
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.82, "principle": "fairness", "description": "Maintain balanced odds between groups"},
+                {"metric": "human_review_rate", "operator": ">=", "value": 0.10, "principle": "accountability", "description": "Ensure human-in-the-loop oversight"},
+            ],
+        },
+    },
+    {
+        "template_id": "HC-DIAG-01",
+        "name": "Healthcare Diagnostics - Safety First",
+        "description": "Strict healthcare template for diagnosis support models, emphasizing explainability and minimum harm.",
+        "domain": "healthcare",
+        "rules": {
+            "principles": ["fairness", "transparency", "privacy"],
+            "reference": "FDA SaMD, clinical AI governance guidance",
+            "recommended_datasets": ["diabetes_readmission"],
+            "items": [
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.03, "principle": "fairness", "description": "Maintain equitable sensitivity across groups"},
+                {"metric": "calibration_difference", "operator": "<=", "value": 0.03, "principle": "fairness", "description": "Comparable risk calibration by group"},
+                {"metric": "shap_coverage", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "All predictions must be explainable"},
+                {"metric": "pii_count", "operator": "==", "value": 0, "principle": "privacy", "description": "No unsupported PII columns allowed"},
+            ],
+        },
+    },
+    {
+        "template_id": "HC-READMIT-01",
+        "name": "Healthcare Readmission - Equity",
+        "description": "Readmission prediction template for operational fairness and reliable model reporting in hospitals.",
+        "domain": "healthcare",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability"],
+            "reference": "Hospital quality and equity reporting best practices",
+            "recommended_datasets": ["diabetes_readmission"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Parity in positive intervention recommendations"},
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.83, "principle": "fairness", "description": "Balanced false-positive and false-negative rates"},
+                {"metric": "model_card_completeness", "operator": ">=", "value": 1.0, "principle": "transparency", "description": "Model card required for every release"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Validation and deployment events must be auditable"},
+            ],
+        },
+    },
+    {
+        "template_id": "CJ-BAIL-01",
+        "name": "Criminal Justice Bail Support - Harm Minimization",
+        "description": "Bail recommendation template with strict constraints against unequal detention outcomes.",
+        "domain": "criminal_justice",
+        "rules": {
+            "principles": ["fairness", "accountability", "transparency"],
+            "reference": "Algorithmic accountability in judicial decision support",
+            "recommended_datasets": ["compas"],
+            "items": [
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.86, "principle": "fairness", "description": "Maintain near-parity in error rates"},
+                {"metric": "false_positive_rate_difference", "operator": "<=", "value": 0.04, "principle": "fairness", "description": "Limit disparate over-prediction of risk"},
+                {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Every recommendation requires explanation"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Full record of model-assisted decisions"},
+            ],
+        },
+    },
+    {
+        "template_id": "EMP-HIRING-02",
+        "name": "Employment Screening - Inclusive Hiring",
+        "description": "Expanded hiring template for resume screening and first-stage applicant ranking systems.",
+        "domain": "employment",
+        "rules": {
+            "principles": ["fairness", "privacy", "transparency"],
+            "reference": "EEOC and inclusive hiring framework",
+            "recommended_datasets": ["adult_income"],
+            "items": [
+                {"metric": "four_fifths_rule", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Maintain four-fifths compliance"},
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.04, "principle": "fairness", "description": "Equalize true positive opportunity"},
+                {"metric": "pii_in_features", "operator": "==", "value": 0, "principle": "privacy", "description": "No direct protected attributes in features"},
+                {"metric": "shap_coverage", "operator": ">=", "value": 0.95, "principle": "transparency", "description": "Explain most candidate ranking outcomes"},
+            ],
+        },
+    },
+    {
+        "template_id": "EDU-ADMIT-02",
+        "name": "Education Admissions - Equal Access",
+        "description": "Admission and scholarship scoring template to enforce fair access and transparent rejection reasons.",
+        "domain": "education",
+        "rules": {
+            "principles": ["fairness", "transparency", "accountability"],
+            "reference": "Education anti-discrimination and accountability standards",
+            "recommended_datasets": ["adult_income"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.78, "principle": "fairness", "description": "Maintain broad access parity"},
+                {"metric": "equalized_odds_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Balanced error rates across student groups"},
+                {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Reason codes for all denials"},
+                {"metric": "audit_trail_required", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Maintain complete review and override history"},
+            ],
+        },
+    },
+    {
+        "template_id": "GOV-SERVICES-01",
+        "name": "Public Services Eligibility - Responsible AI",
+        "description": "Template for social service eligibility prioritization with fairness, privacy, and appeal transparency.",
+        "domain": "general",
+        "rules": {
+            "principles": ["fairness", "privacy", "transparency", "accountability"],
+            "reference": "Public sector automated decision-making safeguards",
+            "recommended_datasets": ["adult_income", "bank_marketing"],
+            "items": [
+                {"metric": "demographic_parity_ratio", "operator": ">=", "value": 0.80, "principle": "fairness", "description": "Fair access to service recommendations"},
+                {"metric": "equal_opportunity_difference", "operator": "<=", "value": 0.05, "principle": "fairness", "description": "Comparable opportunity for approvals"},
+                {"metric": "pii_without_consent", "operator": "==", "value": 0, "principle": "privacy", "description": "No unsupported use of personal data"},
+                {"metric": "explanation_required", "operator": "==", "value": 1.0, "principle": "transparency", "description": "Explainability required for denials"},
+                {"metric": "appeals_process_documented", "operator": "==", "value": 1.0, "principle": "accountability", "description": "Appeals pathway must be documented"},
             ],
         },
     },

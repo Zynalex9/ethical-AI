@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     debug: bool = False
     api_prefix: str = "/api/v1"
+
+    # Logging
+    log_json_output: Optional[bool] = None
+    log_color_output: Optional[bool] = None
+    log_level: Optional[str] = None
     
     # Server
     host: str = "0.0.0.0"

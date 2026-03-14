@@ -19,6 +19,7 @@ import {
     Gavel as GavelIcon,
     Work as WorkIcon,
     AccountBalance as BankIcon,
+    LocalHospital as HospitalIcon,
     Download as DownloadIcon
 } from '@mui/icons-material';
 
@@ -43,13 +44,15 @@ interface BenchmarkDatasetLoaderProps {
 const DATASET_ICONS: Record<string, React.ReactElement> = {
     criminal_justice: <GavelIcon sx={{ fontSize: 40 }} />,
     employment: <WorkIcon sx={{ fontSize: 40 }} />,
-    finance: <BankIcon sx={{ fontSize: 40 }} />
+    finance: <BankIcon sx={{ fontSize: 40 }} />,
+    healthcare: <HospitalIcon sx={{ fontSize: 40 }} />
 };
 
-const DATASET_COLORS: Record<string, 'primary' | 'secondary' | 'success'> = {
+const DATASET_COLORS: Record<string, 'primary' | 'secondary' | 'success' | 'warning'> = {
     criminal_justice: 'primary',
     employment: 'secondary',
-    finance: 'success'
+    finance: 'success',
+    healthcare: 'warning'
 };
 
 export default function BenchmarkDatasetLoader({
@@ -92,6 +95,26 @@ export default function BenchmarkDatasetLoader({
             key_features: ['duration', 'credit_amount', 'installment_rate', 'property', 'existing_credits'],
             domain: 'finance',
             reference: 'UCI Machine Learning Repository - Statlog German Credit'
+        },
+        bank_marketing: {
+            name: 'Bank Marketing',
+            description: 'Portuguese bank telemarketing dataset used to predict term deposit subscription and evaluate fairness in financial outreach.',
+            filename: 'bank_marketing.csv',
+            target_column: 'y',
+            sensitive_attributes: ['age', 'marital', 'education'],
+            key_features: ['job', 'balance', 'housing', 'loan', 'campaign'],
+            domain: 'finance',
+            reference: 'UCI Bank Marketing Dataset'
+        },
+        diabetes_readmission: {
+            name: 'Diabetes Readmission',
+            description: 'Hospital readmission dataset for diabetic patients, useful for healthcare fairness and transparency evaluations.',
+            filename: 'diabetes_130_us_hospitals.csv',
+            target_column: 'readmitted',
+            sensitive_attributes: ['race', 'gender', 'age'],
+            key_features: ['time_in_hospital', 'num_lab_procedures', 'num_medications', 'number_diagnoses'],
+            domain: 'healthcare',
+            reference: 'UCI Diabetes 130-US Hospitals Dataset'
         }
     };
 

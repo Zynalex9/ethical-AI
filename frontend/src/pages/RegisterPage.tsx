@@ -33,13 +33,9 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { getApiErrorMessage } from '../services/api';
 
-// Password complexity rules (must match backend schema)
+// Password rule (must match backend schema)
 const PASSWORD_RULES = [
-    { label: 'At least 8 characters',            test: (p: string) => p.length >= 8 },
-    { label: 'One uppercase letter (A–Z)',        test: (p: string) => /[A-Z]/.test(p) },
-    { label: 'One lowercase letter (a–z)',        test: (p: string) => /[a-z]/.test(p) },
-    { label: 'One digit (0–9)',                   test: (p: string) => /\d/.test(p) },
-    { label: 'One special character (!@#$…)',     test: (p: string) => /[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;'/`~]/.test(p) },
+    { label: 'At least 6 characters', test: (p: string) => p.length >= 6 },
 ];
 
 export default function RegisterPage() {

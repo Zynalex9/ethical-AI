@@ -4,6 +4,7 @@ FastAPI application entry point with CORS, middleware, and router registration.
 
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+import sys
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,7 +27,17 @@ from app.middleware.request_logging import RequestLoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 
 # ---------- Initialise structured logging ----------
-setup_logging(json_output=not settings.debug, level="DEBUG" if settings.debug else "INFO")
+resolved_level = settings.log_level or ("DEBUG" if settings.debug else "INFO")
+if settings.log_json_output is not None:
+    resolved_json_output = settings.log_json_output
+else:
+    # Prefer readable console logs in interactive terminals.
+    resolved_json_output = (not settings.debug) and (not sys.stdout.isatty())
+setup_logging(
+    json_output=resolved_json_output,
+    level=resolved_level,
+    color_output=settings.log_color_output,
+)
 logger = get_logger("main")
 
 

@@ -27,6 +27,10 @@ from app.services.model_loader import UniversalModelLoader
 
 logger = logging.getLogger(__name__)
 
+
+class ElicitationFeatureMismatchError(Exception):
+    """Raised when dataset features are incompatible with the selected model."""
+
 # ─── PII column-name signals (mirrors privacy_validator.py) ─────────────────
 _PII_SIGNALS = [
     "name", "email", "phone", "ssn", "social", "address", "zip", "postcode",
@@ -137,6 +141,21 @@ class RequirementElicitor:
             if any(sig in col_norm for sig in _PII_SIGNALS):
                 pii_cols.append(col)
         return pii_cols
+
+    @staticmethod
+    def _get_expected_feature_count(model: Any) -> Optional[int]:
+        """Infer expected input feature count from loaded model metadata if available."""
+        feature_names = getattr(model, "feature_names", None)
+        if isinstance(feature_names, list) and len(feature_names) > 0:
+            return len(feature_names)
+
+        raw_model = getattr(model, "raw_model", None)
+        if raw_model is not None and hasattr(raw_model, "n_features_in_"):
+            try:
+                return int(raw_model.n_features_in_)
+            except Exception:
+                return None
+        return None
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -297,11 +316,32 @@ class RequirementElicitor:
             X.shape[0], X.shape[1],
         )
 
+        expected_n_features = self._get_expected_feature_count(model)
+        if expected_n_features is not None and X.shape[1] != expected_n_features:
+            raise ElicitationFeatureMismatchError(
+                "Model and dataset feature mismatch: "
+                f"model expects {expected_n_features} features, dataset provides {X.shape[1]} features. "
+                "Please use the same dataset schema used during training (same columns and preprocessing)."
+            )
+
         try:
             preds = model.predict(X.values)
         except Exception as exc:
+            msg = str(exc)
+            mismatch = re.search(r"Expected\s+(\d+)\s+features?,\s+got\s+(\d+)", msg, re.IGNORECASE)
+            if mismatch:
+                expected = mismatch.group(1)
+                got = mismatch.group(2)
+                raise ElicitationFeatureMismatchError(
+                    "Model and dataset feature mismatch: "
+                    f"model expects {expected} features, dataset provides {got} features. "
+                    "Please use the same dataset schema used during training (same columns and preprocessing)."
+                ) from exc
             logger.warning("Model prediction failed during elicitation: %s", exc)
-            return requirements
+            raise ValueError(
+                "Model prediction failed during elicitation. "
+                "Verify model compatibility and preprocessing for the selected dataset."
+            ) from exc
 
         # 1. Prediction class imbalance
         unique, counts = np.unique(preds, return_counts=True)
@@ -369,6 +409,30 @@ class RequirementElicitor:
                 ),
                 reason=f"Model feature count {n_features} > 10.",
                 confidence=0.85,
+            ))
+
+        # 4. No triggered findings → add explicit baseline recommendation
+        if not requirements:
+            requirements.append(self._make_requirement(
+                principle="accountability",
+                name="Baseline Monitoring — No Immediate Model Risks Triggered",
+                description=(
+                    "No high-risk fairness or transparency conditions were triggered by the current "
+                    "elicitation heuristics for this model-dataset pair. "
+                    "Maintain baseline accountability controls: audit trail, periodic fairness checks, "
+                    "and monitoring for drift before and after deployment."
+                ),
+                reason=(
+                    "Model elicitation completed successfully with zero risk triggers under current thresholds."
+                ),
+                confidence=0.70,
+                spec_overrides={
+                    "rules": [
+                        {"metric": "audit_trail_exists", "operator": "==", "value": 1.0},
+                        {"metric": "mlflow_run_logged", "operator": "==", "value": 1.0},
+                    ],
+                    "elicitation_outcome": "no_risk_triggers",
+                },
             ))
 
         logger.info(

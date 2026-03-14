@@ -26,7 +26,7 @@ from ..dependencies import get_current_user
 from ..models.project import Project
 from ..models.requirement import EthicalPrinciple, Requirement, RequirementStatus
 from ..models.user import User
-from ..services.requirement_elicitor import RequirementElicitor
+from ..services.requirement_elicitor import RequirementElicitor, ElicitationFeatureMismatchError
 from ..middleware.logging_config import get_logger
 
 logger = get_logger("routers.requirements")
@@ -234,8 +234,15 @@ async def elicit_from_model(
         suggestions = await elicitor.elicit_from_model_and_dataset(
             body.model_id, body.dataset_id, db
         )
+    except ElicitationFeatureMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        detail = str(exc)
+        status_code = status.HTTP_404_NOT_FOUND if "not found" in detail.lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as exc:
         logger.exception("Elicitation from model failed")
         raise HTTPException(

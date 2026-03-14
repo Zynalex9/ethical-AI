@@ -80,6 +80,7 @@ export default function RequirementElicitationPage() {
     const [analyzingDataset, setAnalyzingDataset]  = useState(false);
     const [analyzingModel,   setAnalyzingModel]    = useState(false);
     const [elicitError,      setElicitError]       = useState('');
+    const [elicitInfo,       setElicitInfo]        = useState('');
 
     // Manual form
     const [formOpen,    setFormOpen]    = useState(false);
@@ -135,12 +136,20 @@ export default function RequirementElicitationPage() {
         if (!selectedDataset) return;
         setAnalyzingDataset(true);
         setElicitError('');
+        setElicitInfo('');
         try {
             const res = await requirementsApi.elicitFromDataset({
                 dataset_id: selectedDataset,
                 project_id: projectId!,
             });
             setDatasetSuggestions(res.map((s: any) => ({ ...s, isSuggestion: true })));
+            if (res.length === 0) {
+                setElicitInfo(
+                    'Dataset analysis completed, but no new requirement suggestions were detected for the current data profile.'
+                );
+            } else {
+                setElicitInfo(`Dataset analysis generated ${res.length} suggestion${res.length === 1 ? '' : 's'}.`);
+            }
         } catch (err: any) {
             setElicitError(err.response?.data?.detail ?? 'Dataset analysis failed');
         } finally {
@@ -152,6 +161,7 @@ export default function RequirementElicitationPage() {
         if (!selectedModel || !modelDataset) return;
         setAnalyzingModel(true);
         setElicitError('');
+        setElicitInfo('');
         try {
             const res = await requirementsApi.elicitFromModel({
                 model_id:   selectedModel,
@@ -159,6 +169,14 @@ export default function RequirementElicitationPage() {
                 project_id: projectId!,
             });
             setModelSuggestions(res.map((s: any) => ({ ...s, isSuggestion: true })));
+            if (res.length === 0) {
+                setElicitInfo(
+                    'Model behaviour analysis completed successfully, but no additional requirement suggestions were triggered. '
+                    + 'This can happen when the current checks do not detect imbalance, disparate impact, or feature-risk conditions.'
+                );
+            } else {
+                setElicitInfo(`Model analysis generated ${res.length} suggestion${res.length === 1 ? '' : 's'}.`);
+            }
         } catch (err: any) {
             setElicitError(err.response?.data?.detail ?? 'Model analysis failed');
         } finally {
@@ -224,6 +242,12 @@ export default function RequirementElicitationPage() {
             {elicitError && (
                 <Alert severity="error" onClose={() => setElicitError('')} sx={{ mb: 2 }}>
                     {elicitError}
+                </Alert>
+            )}
+
+            {elicitInfo && !elicitError && (
+                <Alert severity="info" onClose={() => setElicitInfo('')} sx={{ mb: 2 }}>
+                    {elicitInfo}
                 </Alert>
             )}
 

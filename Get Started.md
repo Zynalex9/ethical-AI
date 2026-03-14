@@ -76,7 +76,8 @@ Open a new terminal:
 ```bash
 cd backend
 .venv\\Scripts\\activate
-celery -A app.celery_app worker --loglevel=info
+celery -A app.celery_app worker --loglevel=info --pool=solo
+
 ```
 
 Optional scheduler (for periodic tasks):

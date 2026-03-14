@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 import pandas as pd
 
 from ..database import get_db
@@ -105,6 +105,19 @@ async def upload_dataset(
 
     if not name.strip():
         raise HTTPException(status_code=400, detail="Dataset name cannot be empty")
+
+    normalized_name = name.strip()
+    existing_dataset_result = await db.execute(
+        select(Dataset.id).where(
+            Dataset.project_id == project_id,
+            func.lower(Dataset.name) == normalized_name.lower(),
+        )
+    )
+    if existing_dataset_result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Dataset with name '{normalized_name}' already exists in this project",
+        )
     
     # Create upload directory
     upload_dir = Path(settings.upload_dir) / "datasets" / str(project_id)
@@ -205,7 +218,7 @@ async def upload_dataset(
     # Create database record
     dataset = Dataset(
         project_id=project_id,
-        name=name,
+        name=normalized_name,
         description=description,
         file_path=str(file_path),
         row_count=row_count,
@@ -439,6 +452,8 @@ async def load_benchmark_dataset(
     - "compas": COMPAS Recidivism dataset (criminal justice)
     - "adult_income": Adult Income/Census dataset (employment fairness)
     - "german_credit": German Credit dataset (financial fairness)
+    - "bank_marketing": Bank Marketing dataset (financial outreach fairness)
+    - "diabetes_readmission": Diabetes Readmission dataset (healthcare fairness)
     
     Args:
         project_id: Project to load dataset into
@@ -475,6 +490,8 @@ async def load_benchmark_dataset(
             user_id=current_user.id
         )
     except ValueError as e:
+        if "already exists in this project" in str(e):
+            raise HTTPException(status_code=409, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=500, detail=f"Benchmark dataset file not found: {str(e)}")
@@ -497,8 +514,12 @@ async def get_available_benchmark_datasets():
     
     seeder = BenchmarkDatasetSeeder()
     datasets = seeder.get_available_datasets()
+    required_files = seeder.get_required_dataset_files()
+    missing_files = [v for v in datasets.values() if not v.get("file_exists", False)]
     
     return {
         "datasets": datasets,
-        "count": len(datasets)
+        "count": len(datasets),
+        "required_files": required_files,
+        "missing_files_count": len(missing_files),
     }
