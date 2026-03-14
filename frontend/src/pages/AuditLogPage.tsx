@@ -185,7 +185,25 @@ export default function AuditLogPage() {
             <Dialog open={!!selectedLog} onClose={() => setSelectedLog(null)}>
                 <DialogTitle>Audit Details</DialogTitle>
                 <DialogContent>
-                    <Box component="pre" sx={{ p: 2, bgcolor: 'grey.100', borderRadius: 1, overflow: 'auto' }}>
+                    <Box
+                        component="pre"
+                        sx={{
+                            p: 2,
+                            bgcolor: (theme) =>
+                                theme.palette.mode === 'dark'
+                                    ? 'rgba(255,255,255,0.06)'
+                                    : 'grey.100',
+                            color: 'text.primary',
+                            border: '1px solid',
+                            borderColor: 'divider',
+                            borderRadius: 1,
+                            overflow: 'auto',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontFamily: 'monospace',
+                            fontSize: '0.85rem',
+                        }}
+                    >
                         {JSON.stringify(selectedLog?.details, null, 2)}
                     </Box>
                 </DialogContent>

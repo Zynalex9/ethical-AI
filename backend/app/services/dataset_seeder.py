@@ -18,6 +18,7 @@ from sqlalchemy import select, func
 from app.models.dataset import Dataset
 from app.models.project import Project
 from app.models.audit_log import AuditLog, AuditAction, ResourceType
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ class BenchmarkDatasetSeeder:
         df = pd.read_csv(source_path)
         
         # Create upload directory for this project
-        upload_dir = Path("uploads") / "datasets" / str(project_id)
+        upload_dir = Path(settings.upload_dir) / "datasets" / str(project_id)
         upload_dir.mkdir(parents=True, exist_ok=True)
         
         # Copy file to uploads directory
@@ -177,7 +178,7 @@ class BenchmarkDatasetSeeder:
             project_id=project_id,
             name=metadata["name"],
             description=metadata["description"],
-            file_path=str(dest_path),
+            file_path=str(dest_path.resolve()),
             row_count=len(df),
             column_count=len(df.columns),
             columns=df.columns.tolist(),

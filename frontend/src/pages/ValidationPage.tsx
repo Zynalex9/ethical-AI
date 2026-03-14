@@ -67,6 +67,7 @@ interface ValidatorDef {
     requiresModel?: boolean;
 }
 
+
 const VALIDATORS: ValidatorDef[] = [
     {
         key: 'fairness',

@@ -47,6 +47,96 @@ class ReportGenerator:
         except Exception:
             return default
 
+    @staticmethod
+    def _format_metric_value(value: Any, precision: int = 3) -> str:
+        """Safely format a metric value for report output."""
+        if value is None:
+            return "N/A"
+        try:
+            return f"{float(value):.{precision}f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def _normalize_recommendations(value: Any) -> List[str]:
+        """Normalize recommendation payloads and drop empty entries."""
+        if not isinstance(value, list):
+            return []
+        normalized: List[str] = []
+        for item in value:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return normalized
+
+    def _build_certificate_compliance_checks(self, validations: Dict[str, Any]) -> List[str]:
+        """Build compliance checks shown in the certificate from actual run outputs."""
+        checks: List[str] = []
+
+        fairness = validations.get("fairness", {}) if isinstance(validations, dict) else {}
+        fairness_status = fairness.get("status")
+        fairness_results = fairness.get("results", []) if isinstance(fairness.get("results"), list) else []
+        fairness_by_metric = {
+            str(r.get("metric_name")): r
+            for r in fairness_results
+            if isinstance(r, dict) and r.get("metric_name")
+        }
+
+        if fairness_status == "completed":
+            dpr = fairness_by_metric.get("demographic_parity_ratio")
+            if dpr:
+                dpr_value = self._format_metric_value(dpr.get("metric_value"), precision=3)
+                dpr_threshold = self._format_metric_value(dpr.get("threshold"), precision=3)
+                dpr_status = "PASS" if dpr.get("passed") else "FAIL"
+                checks.append(
+                    f"Demographic Parity Ratio >= {dpr_threshold}: {dpr_value} ({dpr_status})"
+                )
+            else:
+                checks.append("Demographic Parity Ratio: not evaluated in this run")
+
+            eor = fairness_by_metric.get("equalized_odds_ratio")
+            if eor:
+                eor_value = self._format_metric_value(eor.get("metric_value"), precision=3)
+                eor_threshold = self._format_metric_value(eor.get("threshold"), precision=3)
+                eor_status = "PASS" if eor.get("passed") else "FAIL"
+                checks.append(
+                    f"Equalized Odds Ratio >= {eor_threshold}: {eor_value} ({eor_status})"
+                )
+        else:
+            checks.append("Fairness checks: not run")
+
+        transparency = validations.get("transparency", {}) if isinstance(validations, dict) else {}
+        transparency_status = str(transparency.get("status", "not_run"))
+        if transparency_status == "completed":
+            checks.append("Transparency evidence (SHAP/LIME/model card): available")
+        else:
+            checks.append("Transparency evidence: not available (validation not completed)")
+
+        privacy = validations.get("privacy", {}) if isinstance(validations, dict) else {}
+        privacy_report = privacy.get("report", {}) if isinstance(privacy.get("report"), dict) else {}
+        privacy_status = str(privacy.get("status", "not_run"))
+        if privacy_status == "completed":
+            pii_detected = privacy_report.get("pii_detected", [])
+            pii_count = len(pii_detected) if isinstance(pii_detected, list) else 0
+            checks.append(f"PII detection: {pii_count} flagged column(s)")
+
+            k_anonymity = privacy_report.get("k_anonymity", {}) if isinstance(privacy_report, dict) else {}
+            if isinstance(k_anonymity, dict) and k_anonymity:
+                k_val = self._format_metric_value(k_anonymity.get("k_value"), precision=0)
+                k_status = "PASS" if k_anonymity.get("satisfies_k") else "FAIL"
+                checks.append(f"k-Anonymity (k={k_val}): {k_status}")
+
+            hipaa = privacy_report.get("hipaa", {}) if isinstance(privacy_report, dict) else {}
+            if isinstance(hipaa, dict) and hipaa:
+                hipaa_status = "PASS" if hipaa.get("overall_passed") else "FAIL"
+                checks.append(f"HIPAA Safe Harbor: {hipaa_status}")
+        else:
+            checks.append("Privacy checks: not run")
+
+        return checks
+
     def format_executive_summary(self, validation_results: Dict[str, Any]) -> str:
         validations = validation_results.get("validations", {})
         total_sections = 0
@@ -208,24 +298,67 @@ class ReportGenerator:
     def _generate_recommendations(self, validations: Dict[str, Any]) -> List[str]:
         recommendations: List[str] = []
 
-        fairness_results = validations.get("fairness", {}).get("results", [])
+        fairness = validations.get("fairness", {}) if isinstance(validations, dict) else {}
+        fairness_results = fairness.get("results", []) if isinstance(fairness.get("results"), list) else []
         failed_fairness = [r for r in fairness_results if not r.get("passed")]
         if failed_fairness:
-            recommendations.append("Retrain model with fairness constraints and review sensitive-feature impact.")
+            failed_metric_names = [str(r.get("metric_name", "unknown_metric")) for r in failed_fairness][:3]
+            recommendations.append(
+                "Address failed fairness metrics "
+                f"({', '.join(failed_metric_names)}): rebalance data and tune decision thresholds."
+            )
+        elif fairness.get("status") not in {"completed", None, "not_run"}:
+            recommendations.append("Investigate fairness validation execution status before approving deployment.")
+        elif fairness.get("status") == "not_run":
+            recommendations.append("Run fairness validation on sensitive groups before production release.")
 
-        transparency = validations.get("transparency", {})
-        if not transparency.get("feature_importance"):
+        transparency = validations.get("transparency", {}) if isinstance(validations, dict) else {}
+        transparency_status = transparency.get("status")
+        if transparency_status == "completed" and not transparency.get("feature_importance"):
             recommendations.append("Enable/verify explainability artifact generation (SHAP/LIME) for transparency evidence.")
+        elif transparency_status == "not_run":
+            recommendations.append("Run transparency validation and publish model-card evidence for governance reviews.")
 
-        privacy = validations.get("privacy", {}).get("report", {})
+        transparency_warning = transparency.get("warning")
+        if transparency_warning:
+            recommendations.append(f"Transparency warning: {str(transparency_warning)}")
+
+        privacy_section = validations.get("privacy", {}) if isinstance(validations, dict) else {}
+        privacy = privacy_section.get("report", {}) if isinstance(privacy_section.get("report"), dict) else {}
         pii_detected = privacy.get("pii_detected", []) if isinstance(privacy, dict) else []
         if pii_detected:
-            recommendations.append("Remove, mask, or tokenize detected PII columns before model training/inference.")
+            pii_cols = [str(c) for c in pii_detected[:3]]
+            recommendations.append(
+                "Remove, mask, or tokenize detected PII columns "
+                f"({', '.join(pii_cols)}) before model training/inference."
+            )
 
-        if not recommendations:
-            recommendations.append("Maintain periodic monitoring and rerun validation after any model/data updates.")
+        k_anonymity = privacy.get("k_anonymity", {}) if isinstance(privacy, dict) else {}
+        if isinstance(k_anonymity, dict) and k_anonymity and not k_anonymity.get("satisfies_k"):
+            k_val = self._format_metric_value(k_anonymity.get("k_value"), precision=0)
+            recommendations.append(f"Improve quasi-identifier generalization/suppression to satisfy k-anonymity (target k={k_val}).")
 
-        return recommendations
+        l_diversity = privacy.get("l_diversity", {}) if isinstance(privacy, dict) else {}
+        if isinstance(l_diversity, dict) and l_diversity and not l_diversity.get("satisfies_l"):
+            l_val = self._format_metric_value(l_diversity.get("l_value"), precision=0)
+            recommendations.append(f"Increase sensitive-attribute diversity to satisfy l-diversity (target l={l_val}).")
+
+        if privacy_section.get("status") == "not_run":
+            recommendations.append("Run privacy validation (PII, anonymity checks) before sharing datasets externally.")
+
+        # De-duplicate while preserving order.
+        deduped: List[str] = []
+        seen = set()
+        for rec in recommendations:
+            key = rec.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                deduped.append(rec)
+
+        if not deduped:
+            deduped.append("Maintain periodic monitoring and rerun validation after any model/data updates.")
+
+        return deduped
 
     async def generate_compliance_report(self, project_id: UUID) -> Dict[str, Any]:
         result = await self.db.execute(select(Project).where(Project.id == project_id))
@@ -370,12 +503,15 @@ class ReportGenerator:
         """Generate a validation report PDF with proper formatting."""
         title = f"Validation Report - {report_data.get('project_name', 'Project')}"
         
+        overall_status = report_data.get('overall_status')
+        safe_overall_status = str(overall_status).upper() if overall_status is not None else 'N/A'
+
         lines = [
             "",
             f"Model: {report_data.get('model_name', 'N/A')}",
             f"Dataset: {report_data.get('dataset_name', 'N/A')}",
             f"Date: {report_data.get('validation_date', 'N/A')[:10] if report_data.get('validation_date') else 'N/A'}",
-            f"Overall Status: {report_data.get('overall_status', 'N/A').upper()}",
+            f"Overall Status: {safe_overall_status}",
             "",
             "=" * 70,
             "EXECUTIVE SUMMARY",
@@ -384,7 +520,8 @@ class ReportGenerator:
         ]
         
         # Add executive summary with line wrapping
-        summary = report_data.get("executive_summary", "N/A")
+        summary_raw = report_data.get("executive_summary")
+        summary = str(summary_raw) if summary_raw is not None else "N/A"
         if len(summary) > 85:
             # Simple word wrapping
             words = summary.split()
@@ -416,8 +553,8 @@ class ReportGenerator:
             for result in fairness.get("results", [])[:10]:  # Limit to prevent overflow
                 status = "PASS" if result.get("passed") else "FAIL"
                 metric = result.get("metric_name", "unknown")
-                value = result.get("metric_value", 0)
-                lines.append(f"  {metric}: {value:.3f} [{status}]")
+                formatted_value = self._format_metric_value(result.get("metric_value"), precision=3)
+                lines.append(f"  {metric}: {formatted_value} [{status}]")
             lines.append("")
         
         # Add transparency status
@@ -441,12 +578,17 @@ class ReportGenerator:
             ""
         ])
         
-        for rec in report_data.get("recommendations", [])[:8]:  # Limit recommendations
+        recommendations = self._normalize_recommendations(report_data.get("recommendations"))
+        if not recommendations:
+            recommendations = self._generate_recommendations(report_data.get("validations", {}))
+
+        for rec in recommendations[:8]:  # Limit recommendations
+            rec_text = str(rec) if rec is not None else "N/A"
             # Wrap long recommendations
-            if len(rec) > 80:
-                lines.append(f"- {rec[:77]}...")
+            if len(rec_text) > 80:
+                lines.append(f"- {rec_text[:77]}...")
             else:
-                lines.append(f"- {rec}")
+                lines.append(f"- {rec_text}")
         
         lines.extend([
             "",
@@ -530,6 +672,11 @@ class ReportGenerator:
         accountability_status = "PASS" if validations.get("accountability") else "RECORDED"
 
         # Build certificate body with proper formatting
+        compliance_checks = self._build_certificate_compliance_checks(validations)
+        recommendations = self._normalize_recommendations(report.get("recommendations"))
+        if not recommendations:
+            recommendations = self._generate_recommendations(validations)
+
         lines = [
             "",
             "",
@@ -565,20 +712,27 @@ class ReportGenerator:
             "REGULATORY COMPLIANCE CHECKS",
             "-" * 70,
             "",
-            "  * ECOA 80% Rule (Demographic Parity >= 0.80)",
-            "  * EEOC Four-Fifths Rule",
-            "  * GDPR Privacy Requirements",
-            "  * PII Detection and Data Protection",
-            "  * HIPAA Safe Harbor (if enabled)",
+        ]
+
+        for check in compliance_checks[:6]:
+            check_text = str(check).strip()
+            if not check_text:
+                continue
+            if len(check_text) > 65:
+                lines.append(f"  * {check_text[:62]}...")
+            else:
+                lines.append(f"  * {check_text}")
+
+        lines.extend([
             "",
             "",
             "RECOMMENDATIONS",
             "-" * 70,
             "",
-        ]
+        ])
         
         # Add recommendations with proper formatting
-        for rec in report.get("recommendations", [])[:6]:  # Limit to 6 recommendations
+        for rec in recommendations[:6]:  # Limit to 6 recommendations
             if len(rec) > 65:
                 lines.append(f"  * {rec[:62]}...")
             else:

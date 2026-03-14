@@ -1161,13 +1161,79 @@ async def get_suite_results(
         )
         privacy_val = result.scalar_one_or_none()
         if privacy_val:
-            response["validations"]["privacy"] = {
+            privacy_data: Dict[str, Any] = {
                 "validation_id": str(privacy_val.id),
                 "status": privacy_val.status if isinstance(privacy_val.status, str) else privacy_val.status.value,
                 "progress": privacy_val.progress,
                 "mlflow_run_id": privacy_val.mlflow_run_id,
-                "completed_at": privacy_val.completed_at.isoformat() if privacy_val.completed_at else None
+                "completed_at": privacy_val.completed_at.isoformat() if privacy_val.completed_at else None,
+                "overall_passed": None,
+                "pii_detected": None,
+                "k_anonymity": None,
+                "l_diversity": None,
+                "differential_privacy": None,
+                "hipaa": None,
+                "privacy_risk_score": None,
+                "recommendations": [],
             }
+
+            # Recover rich privacy payload from Celery result when available.
+            if suite.celery_task_id:
+                try:
+                    from celery.result import AsyncResult
+                    from ..celery_app import celery_app as _celery
+
+                    task_result = AsyncResult(suite.celery_task_id, app=_celery)
+                    if task_result.state == "SUCCESS" and task_result.result:
+                        p_vals = task_result.result.get("validations", {}).get("privacy", {})
+                        if p_vals:
+                            for key in [
+                                "overall_passed",
+                                "pii_detected",
+                                "k_anonymity",
+                                "l_diversity",
+                                "differential_privacy",
+                                "hipaa",
+                                "privacy_risk_score",
+                                "recommendations",
+                            ]:
+                                if key in p_vals:
+                                    privacy_data[key] = p_vals.get(key)
+                except Exception:
+                    pass  # Non-fatal – fallback below may still populate details.
+
+            # Fallback: load privacy artifact if Celery result is unavailable/expired.
+            if privacy_data.get("overall_passed") is None and privacy_val.mlflow_run_id:
+                try:
+                    import json
+                    import os
+                    from ..config import settings
+
+                    artifact_path = os.path.join(
+                        settings.mlflow_artifact_location,
+                        "1",
+                        privacy_val.mlflow_run_id,
+                        "artifacts",
+                        "privacy_report.json",
+                    )
+                    if os.path.exists(artifact_path):
+                        with open(artifact_path, "r", encoding="utf-8") as f:
+                            privacy_report = json.load(f)
+
+                        privacy_data["overall_passed"] = privacy_report.get("overall_passed")
+                        pii_results = privacy_report.get("pii_results", [])
+                        if isinstance(pii_results, list):
+                            privacy_data["pii_detected"] = [r for r in pii_results if isinstance(r, dict) and r.get("is_pii")]
+                        privacy_data["k_anonymity"] = privacy_report.get("k_anonymity")
+                        privacy_data["l_diversity"] = privacy_report.get("l_diversity")
+                        privacy_data["differential_privacy"] = privacy_report.get("differential_privacy")
+                        privacy_data["hipaa"] = privacy_report.get("hipaa")
+                        privacy_data["privacy_risk_score"] = privacy_report.get("privacy_risk_score")
+                        privacy_data["recommendations"] = privacy_report.get("recommendations", [])
+                except Exception:
+                    pass
+
+            response["validations"]["privacy"] = privacy_data
     
     return _json_safe(response)
 

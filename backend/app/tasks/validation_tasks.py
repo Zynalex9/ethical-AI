@@ -7,6 +7,8 @@ validations to run without blocking HTTP requests.
 
 import os
 import logging
+import asyncio
+from pathlib import Path
 from typing import Dict, Any, Optional
 from uuid import UUID
 from datetime import datetime, timezone
@@ -39,6 +41,23 @@ def _safe_error_message(e: Exception, max_length: int = 2000) -> str:
     return msg
 
 
+def _resolve_dataset_file_path(stored_path: str) -> str:
+    """Resolve dataset path robustly for worker context (handles legacy relative paths)."""
+    p = Path(stored_path)
+    if p.is_absolute():
+        return str(p)
+
+    # Legacy records may store paths like 'uploads/datasets/...'.
+    backend_dir = Path(settings.upload_dir).resolve().parent
+    candidate_from_backend = (backend_dir / p).resolve()
+    if candidate_from_backend.exists():
+        return str(candidate_from_backend)
+
+    # Fallback: treat as relative to upload dir.
+    candidate_from_uploads = (Path(settings.upload_dir).resolve() / p).resolve()
+    return str(candidate_from_uploads)
+
+
 # Create async engine for tasks
 engine = create_async_engine(
     settings.database_url,
@@ -55,6 +74,21 @@ async_session_maker = async_sessionmaker(
     autocommit=False,
     autoflush=False
 )
+
+# Reuse one event loop per Celery worker process.
+# Creating and closing a fresh loop per task can leave pooled asyncpg
+# connections bound to a closed loop, causing intermittent failures on
+# subsequent tasks (e.g. 'NoneType' object has no attribute 'send').
+_TASK_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _run_async_in_task_loop(coro: Any) -> Any:
+    """Run coroutine on a persistent process-local asyncio loop."""
+    global _TASK_LOOP
+    if _TASK_LOOP is None or _TASK_LOOP.is_closed():
+        _TASK_LOOP = asyncio.new_event_loop()
+    asyncio.set_event_loop(_TASK_LOOP)
+    return _TASK_LOOP.run_until_complete(coro)
 
 
 async def get_db_session():
@@ -212,7 +246,14 @@ async def _run_fairness_validation_async(
         await db.commit()
         
         # Load dataset
-        df = pd.read_csv(dataset_record.file_path)
+        resolved_dataset_path = _resolve_dataset_file_path(dataset_record.file_path)
+        if not os.path.exists(resolved_dataset_path):
+            raise FileNotFoundError(
+                "Dataset file not found on disk for validation. "
+                f"Stored path: '{dataset_record.file_path}', resolved path: '{resolved_dataset_path}'. "
+                "Re-upload or re-load this dataset and try again."
+            )
+        df = pd.read_csv(resolved_dataset_path)
         logger.info(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
         
         # Check if target column is provided
@@ -524,8 +565,6 @@ def run_fairness_validation_task(
     Returns:
         Dictionary with validation results
     """
-    import asyncio
-    
     def progress_callback(progress, step):
         self.update_state(state="PROGRESS", meta={"progress": progress, "step": step})
     
@@ -544,13 +583,7 @@ def run_fairness_validation_task(
                 progress_callback=progress_callback
             )
     
-    # Run async function using asyncio event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_run())
-    finally:
-        loop.close()
+    return _run_async_in_task_loop(_run())
 
 
 async def _run_transparency_validation_async(
@@ -638,7 +671,14 @@ async def _run_transparency_validation_async(
         
         # Load model and dataset
         model = UniversalModelLoader.load(model_record.file_path)
-        df = pd.read_csv(dataset_record.file_path)
+        resolved_dataset_path = _resolve_dataset_file_path(dataset_record.file_path)
+        if not os.path.exists(resolved_dataset_path):
+            raise FileNotFoundError(
+                "Dataset file not found on disk for validation. "
+                f"Stored path: '{dataset_record.file_path}', resolved path: '{resolved_dataset_path}'. "
+                "Re-upload or re-load this dataset and try again."
+            )
+        df = pd.read_csv(resolved_dataset_path)
         
         # FIX: Validate that target column exists in dataset
         if target_column not in df.columns:
@@ -990,7 +1030,14 @@ async def _run_privacy_validation_async(
         await db.commit()
         
         # Load dataset
-        df = pd.read_csv(dataset_record.file_path)
+        resolved_dataset_path = _resolve_dataset_file_path(dataset_record.file_path)
+        if not os.path.exists(resolved_dataset_path):
+            raise FileNotFoundError(
+                "Dataset file not found on disk for validation. "
+                f"Stored path: '{dataset_record.file_path}', resolved path: '{resolved_dataset_path}'. "
+                "Re-upload or re-load this dataset and try again."
+            )
+        df = pd.read_csv(resolved_dataset_path)
         
         if progress_callback:
             progress_callback(50, "Detecting PII")
@@ -1234,8 +1281,6 @@ def run_transparency_validation_task(
     user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Run transparency/explainability validation in background."""
-    import asyncio
-    
     def progress_callback(progress, step):
         self.update_state(state="PROGRESS", meta={"progress": progress, "step": step})
     
@@ -1252,13 +1297,7 @@ def run_transparency_validation_task(
                 progress_callback=progress_callback
             )
     
-    # Run async function using asyncio event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_run())
-    finally:
-        loop.close()
+    return _run_async_in_task_loop(_run())
 
 
 @celery_app.task(bind=True, name="run_privacy_validation_task")
@@ -1276,8 +1315,6 @@ def run_privacy_validation_task(
     dp_apply_noise: bool = False,
 ) -> Dict[str, Any]:
     """Run privacy validation in background."""
-    import asyncio
-    
     def progress_callback(progress, step):
         self.update_state(state="PROGRESS", meta={"progress": progress, "step": step})
     
@@ -1298,13 +1335,7 @@ def run_privacy_validation_task(
                 dp_apply_noise=dp_apply_noise,
             )
     
-    # Run async function using asyncio event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_run())
-    finally:
-        loop.close()
+    return _run_async_in_task_loop(_run())
 
 
 @celery_app.task(bind=True, name="run_all_validations_task")
@@ -1327,7 +1358,6 @@ def run_all_validations_task(
         "fairness", "transparency", "privacy", "accountability"
     If empty / None every validator runs (backward-compatible default).
     """
-    import asyncio
     from app.models.validation_suite import ValidationSuite
 
     # ── normalise selection ────────────────────────────────────────────
@@ -1565,9 +1595,4 @@ def run_all_validations_task(
                         logger.error(f"Failed to persist suite error state: {db_err}")
                 raise
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_run())
-    finally:
-        loop.close()
+    return _run_async_in_task_loop(_run())
