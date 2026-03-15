@@ -9,7 +9,6 @@ from app.models.validation import Validation, ValidationResult
 from app.models.validation_suite import ValidationSuite
 from app.models.audit_log import AuditLog
 from app.models.notification import Notification
-from app.models.scheduled_validation import ScheduledValidation
 from app.models.remediation import RemediationChecklist
 
 __all__ = [
@@ -24,6 +23,5 @@ __all__ = [
     "ValidationSuite",
     "AuditLog",
     "Notification",
-    "ScheduledValidation",
     "RemediationChecklist",
 ]

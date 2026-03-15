@@ -50,7 +50,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi, templatesApi, getApiErrorMessage } from '../services/api';
 import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
 import TraceabilityMatrix from '../components/TraceabilityMatrix';
-import ScheduleSettings from '../components/ScheduleSettings';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { Template } from '../types';
 
@@ -829,9 +828,6 @@ export default function ProjectDetailPage() {
 
             {/* Validations Tab */}
             <TabPanel value={tab} index={3}>
-                {/* Scheduled Re-Validation Settings */}
-                {id && <ScheduleSettings projectId={id} />}
-
                 {validationsLoading ? (
                     <CircularProgress />
                 ) : validationHistory?.length === 0 ? (

@@ -7,31 +7,32 @@ git clone <your-repo-url>
 cd BS
 ```
 
-## 2. Start PostgreSQL in Docker
+## 2. Start PostgreSQL + Redis in Docker
 
 ```bash
-docker-compose up -d postgres
+docker compose up -d postgres redis
 ```
 
 Verify DB health:
 
 ```bash
-docker-compose ps
-docker-compose logs -f postgres
+docker compose ps
+docker compose logs -f postgres
 ```
 
-## 3. Start Redis in Docker (required for Celery)
+## 3. Redis port options (required for Celery)
 
-Default Redis port:
+Default Redis host port (`6379`):
 
 ```bash
-docker run -d --name redis-ethical-ai -p 6379:6379 redis:latest
+docker compose up -d redis
 ```
 
-If `6379` is busy and you want a custom host port (example `5498`):
+If `6379` is busy, set a custom host port (example `5498`) and recreate Redis:
 
 ```bash
-docker run -d -p 6379:6379 redis
+$env:REDIS_HOST_PORT=5498
+docker compose up -d --force-recreate redis
 ```
 
 If using custom host port, update backend env before running API/worker:
@@ -80,12 +81,6 @@ celery -A app.celery_app worker --loglevel=info --pool=solo
 
 ```
 
-Optional scheduler (for periodic tasks):
-
-```bash
-celery -A app.celery_app beat --loglevel=info
-```
-
 ## 6. Frontend setup
 
 Open another terminal:
@@ -106,8 +101,28 @@ npm run dev
 Start full local stack:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
+
+## 9. Optional: Generate a real-world model zoo for testing
+
+This trains multiple model types across benchmark datasets already in this repo
+(Adult, Bank Marketing, COMPAS, Diabetes, German Credit) and saves uploadable
+`.joblib` files.
+
+```bash
+cd backend
+.venv\\Scripts\\activate
+python scripts/train_real_world_model_zoo.py
+```
+
+Output location:
+
+```text
+backend/uploads/models/model_zoo/
+```
+
+Then upload generated models through the `/models/upload` flow and run validations.
 
 ## Common commands
 
@@ -126,5 +141,5 @@ docker logs -f redis-ethical-ai
 
 # stop docker services
 cd ..
-docker-compose down
+docker compose down
 ```

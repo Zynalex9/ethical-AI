@@ -1572,13 +1572,6 @@ def run_all_validations_task(
                 results["overall_passed"] = overall_passed
                 results["status"] = "completed"
 
-                # ── Trigger metric regression check ───────────────────
-                try:
-                    from app.tasks.scheduled_tasks import check_metric_regression
-                    check_metric_regression.delay(str(suite.id))
-                except Exception as _reg_err:
-                    logger.warning("Failed to queue regression check: %s", _reg_err)
-
                 self.update_state(state="PROGRESS", meta={"progress": 100, "step": "Complete"})
                 return results
 

@@ -236,18 +236,6 @@ export interface Notification {
     created_at: string;
 }
 
-// Scheduled Validation types (Phase 3)
-export interface ScheduledValidation {
-    id: string;
-    project_id: string;
-    enabled: boolean;
-    frequency: 'daily' | 'weekly' | 'monthly';
-    last_run_at: string | null;
-    next_run_at: string | null;
-    created_at: string;
-    updated_at: string;
-}
-
 // Differential Privacy result (Phase 3)
 export interface DPResult {
     measured_epsilon: number;

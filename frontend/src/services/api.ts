@@ -543,29 +543,6 @@ export const notificationsApi = {
     },
 };
 
-// Scheduled Validations API – Phase 3
-export const scheduledValidationApi = {
-    get: async (projectId: string) => {
-        const response = await api.get(`/scheduled-validations/${projectId}`);
-        return response.data;
-    },
-
-    create: async (data: { project_id: string; frequency: string; last_config?: Record<string, any> }) => {
-        const response = await api.post('/scheduled-validations', data);
-        return response.data;
-    },
-
-    update: async (projectId: string, data: { enabled?: boolean; frequency?: string }) => {
-        const response = await api.put(`/scheduled-validations/${projectId}`, data);
-        return response.data;
-    },
-
-    delete: async (projectId: string) => {
-        const response = await api.delete(`/scheduled-validations/${projectId}`);
-        return response.data;
-    },
-};
-
 // Remediation API – Phase 3
 export const remediationApi = {
     getChecklists: async (suiteId: string) => {

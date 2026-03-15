@@ -1,8 +1,7 @@
 """
 Notification model for in-app alerts.
 
-Stores notifications triggered by metric regressions, scheduled validations,
-and other system events.
+Stores notifications triggered by validation events and other system events.
 """
 
 import uuid

@@ -90,13 +90,14 @@ Celery requires Redis broker/backend.
 Default setup:
 
 ```bash
-docker run -d --name redis-ethical-ai -p 6379:6379 redis:latest
+docker compose up -d redis
 ```
 
 If you use a custom host port (for example `5498`):
 
 ```bash
-docker run -d --name redis-ethical-ai -p 5498:6379 redis:latest
+$env:REDIS_HOST_PORT=5498
+docker compose up -d --force-recreate redis
 ```
 
 Then set backend env values accordingly:

@@ -81,6 +81,26 @@ export default function PrivacyDetailPage() {
 
     const piiDetected = privacyData.pii_results?.filter((pii: PIIResult) => pii.is_pii) || [];
 
+    // Support both legacy and current HIPAA payload shapes from backend.
+    const hipaaRows = (privacyData?.hipaa?.results || []).map((r: any) => {
+        const identifier = r.label || r.identifier || r.identifier_id || 'Unknown';
+        const flaggedColumns = r.flagged_columns || r.columns_flagged || [];
+        const valueSamples = r.flagged_value_samples || [];
+        const detail =
+            r.detail ||
+            r.description ||
+            (valueSamples.length > 0
+                ? `Examples: ${valueSamples.slice(0, 2).join(' | ')}`
+                : 'No direct identifier evidence found.');
+
+        return {
+            ...r,
+            identifier,
+            flaggedColumns,
+            detail,
+        };
+    });
+
     return (
         <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
             {/* Header */}
@@ -404,10 +424,10 @@ export default function PrivacyDetailPage() {
                                     </TableRow>
                                 </TableHead>
                                 <TableBody>
-                                    {privacyData.hipaa.results?.map((r: any, idx: number) => (
+                                    {hipaaRows.map((r: any, idx: number) => (
                                         <TableRow key={idx} sx={{ bgcolor: r.passed ? 'transparent' : 'error.900' }}>
                                             <TableCell sx={{ textTransform: 'capitalize' }}>
-                                                {r.identifier?.replace(/_/g, ' ')}
+                                                {String(r.identifier).replace(/_/g, ' ')}
                                             </TableCell>
                                             <TableCell>
                                                 <Chip
@@ -417,8 +437,8 @@ export default function PrivacyDetailPage() {
                                                 />
                                             </TableCell>
                                             <TableCell>
-                                                {r.columns_flagged?.length > 0
-                                                    ? r.columns_flagged.map((c: string) => (
+                                                {r.flaggedColumns?.length > 0
+                                                    ? r.flaggedColumns.map((c: string) => (
                                                         <Chip key={c} label={c} size="small" variant="outlined" sx={{ mr: 0.5, mb: 0.5 }} />
                                                     ))
                                                     : '—'}

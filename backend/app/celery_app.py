@@ -12,7 +12,7 @@ celery_app = Celery(
     "ethical_ai_tasks",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.tasks.validation_tasks", "app.tasks.scheduled_tasks"]
+    include=["app.tasks.validation_tasks"]
 )
 
 # Celery configuration
@@ -36,14 +36,4 @@ celery_app.conf.task_routes = {
     "app.tasks.validation_tasks.run_transparency_validation_task": {"queue": "validations"},
     "app.tasks.validation_tasks.run_privacy_validation_task": {"queue": "validations"},
     "app.tasks.validation_tasks.run_all_validations_task": {"queue": "validations"},
-    "app.tasks.scheduled_tasks.run_scheduled_validations": {"queue": "validations"},
-    "app.tasks.scheduled_tasks.check_metric_regression": {"queue": "validations"},
-}
-
-# Celery Beat schedule — fires the scheduled-validation scanner every 5 minutes
-celery_app.conf.beat_schedule = {
-    "scan-scheduled-validations": {
-        "task": "run_scheduled_validations",
-        "schedule": 300.0,  # every 5 minutes
-    },
 }
