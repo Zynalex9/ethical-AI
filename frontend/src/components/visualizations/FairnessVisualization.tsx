@@ -30,7 +30,8 @@ export default function FairnessVisualization({ metrics, confusion_matrices }: F
     const radarData = metrics.map((m) => ({ 
         metric: m.name, 
         actual: Math.min(Math.max(m.value, 0), 1),  // Clamp to [0, 1]
-        threshold: Math.min(Math.max(m.threshold, 0), 1)  // Clamp threshold too
+        threshold: Math.min(Math.max(m.threshold, 0), 1),  // Clamp threshold too
+        reference: 0.8,
     }));
 
     const groupData = metrics[0]?.by_group
@@ -85,9 +86,8 @@ export default function FairnessVisualization({ metrics, confusion_matrices }: F
                                 <PolarRadiusAxis domain={[0, 1]} tick={{ fontSize: 12 }} />
                                 <Radar name="Actual" dataKey="actual" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.35} />
                                 <Radar name="Threshold" dataKey="threshold" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} />
-                                {/* Threshold reference ring at 0.8 (common fairness threshold) */}
-                                <Radar name="0.8 Rule" dataKey="reference" stroke="#ef4444" strokeDasharray="5 5" fill="transparent" 
-                                       data={radarData.map(d => ({ ...d, reference: 0.8 }))} />
+                                    {/* Threshold reference ring at 0.8 (common fairness threshold) */}
+                                    <Radar name="0.8 Rule" dataKey="reference" stroke="#ef4444" strokeDasharray="5 5" fill="transparent" />
                                 <Tooltip />
                             </RadarChart>
                         </ResponsiveContainer>

@@ -1,0 +1,102 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ethical-ai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-ethical_ai}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ethical-ai-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ${DOCKERHUB_NAMESPACE:-yourdockerhub}/ethical-ai-backend:${APP_TAG:-latest}
+    container_name: ethical-ai-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-ethical_ai}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      JWT_ALGORITHM: HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost","http://localhost:80","http://127.0.0.1","http://127.0.0.1:80"]}
+      DEBUG: "false"
+      UPLOAD_DIR: /app/uploads
+      MAX_UPLOAD_SIZE_MB: 500
+      MLFLOW_TRACKING_URI: sqlite:////app/mlruns/mlflow.db
+      MLFLOW_ARTIFACT_LOCATION: /app/mlruns
+    volumes:
+      - uploads_data:/app/uploads
+      - mlflow_data:/app/mlruns
+    ports:
+      - "8000:8000"
+
+  celery-worker:
+    image: ${DOCKERHUB_NAMESPACE:-yourdockerhub}/ethical-ai-backend:${APP_TAG:-latest}
+    container_name: ethical-ai-celery
+    restart: unless-stopped
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-ethical_ai}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      UPLOAD_DIR: /app/uploads
+      MLFLOW_TRACKING_URI: sqlite:////app/mlruns/mlflow.db
+      MLFLOW_ARTIFACT_LOCATION: /app/mlruns
+    volumes:
+      - uploads_data:/app/uploads
+      - mlflow_data:/app/mlruns
+
+  frontend:
+    image: ${DOCKERHUB_NAMESPACE:-yourdockerhub}/ethical-ai-frontend:${APP_TAG:-latest}
+    container_name: ethical-ai-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  mlflow_data:

@@ -126,3 +126,4 @@ CELERY_RESULT_BACKEND=redis://localhost:5498/0
 ## Quick Navigation
 
 - Detailed setup and run commands: `Get Started.md`
+- Client pull-and-run Docker guide: `Client Deployment.md`
