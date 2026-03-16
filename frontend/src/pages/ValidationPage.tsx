@@ -59,6 +59,8 @@ import {
 } from "../services/api";
 import type { Template } from "../types";
 import FairnessMetricDetail from "../components/FairnessMetricDetail";
+import CertificateModal from "../components/CertificateModal";
+import { useAuth } from "../contexts/AuthContext";
 
 // ─── Validator definitions ────────────────────────────────────────────────────
 interface ValidatorDef {
@@ -222,6 +224,7 @@ export default function ValidationPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const viewSuiteId = searchParams.get("suite");
+  const { user } = useAuth();
 
   // Wizard step: 0=select, 1=configure, 2=results
   const [activeStep, setActiveStep] = useState(0);
@@ -282,6 +285,9 @@ export default function ValidationPage() {
   const [showWarningDialog, setShowWarningDialog] = useState(false);
   const [selectedFairnessMetric, setSelectedFairnessMetric] =
     useState<any>(null);
+
+  // Certificate modal
+  const [showCertificate, setShowCertificate] = useState(false);
 
   // Load existing suite when navigated via ?suite=
   useEffect(() => {
@@ -1261,10 +1267,10 @@ export default function ValidationPage() {
                         sx={{ ml: 1 }}
                       >
                         {selectedValidators.includes("transparency") &&
-                        !selectedValidators.includes("fairness")
+                          !selectedValidators.includes("fairness")
                           ? "(required for Transparency)"
                           : selectedValidators.includes("fairness") &&
-                              predictionMode === "model"
+                            predictionMode === "model"
                             ? "(required for Fairness / Transparency)"
                             : "(required for Transparency)"}
                       </Typography>
@@ -2273,7 +2279,7 @@ export default function ValidationPage() {
                           size="small"
                           color={
                             results.validations.transparency.status ===
-                            "completed"
+                              "completed"
                               ? "success"
                               : "default"
                           }
@@ -2312,76 +2318,76 @@ export default function ValidationPage() {
                     )}
                     {results.validations.transparency.model_card
                       ?.performance_metrics && (
-                      <Box
-                        sx={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 0.75,
-                          mb: 1.5,
-                        }}
-                      >
-                        {Object.entries(
-                          results.validations.transparency.model_card
-                            .performance_metrics,
-                        ).map(([k, val]: any) => (
-                          <Chip
-                            key={k}
-                            label={`${k}: ${(val * 100).toFixed(1)}%`}
-                            size="small"
-                            variant="outlined"
-                          />
-                        ))}
-                      </Box>
-                    )}
+                        <Box
+                          sx={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: 0.75,
+                            mb: 1.5,
+                          }}
+                        >
+                          {Object.entries(
+                            results.validations.transparency.model_card
+                              .performance_metrics,
+                          ).map(([k, val]: any) => (
+                            <Chip
+                              key={k}
+                              label={`${k}: ${(val * 100).toFixed(1)}%`}
+                              size="small"
+                              variant="outlined"
+                            />
+                          ))}
+                        </Box>
+                      )}
 
                     {/* Explanation Fidelity */}
                     {results.validations.transparency.explanation_fidelity !=
                       null && (
-                      <Box sx={{ mb: 1.5 }}>
-                        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                          Explanation Fidelity
-                        </Typography>
-                        <Box
-                          sx={{ display: "flex", alignItems: "center", gap: 1 }}
-                        >
-                          <LinearProgress
-                            variant="determinate"
-                            value={
-                              results.validations.transparency
-                                .explanation_fidelity * 100
-                            }
-                            sx={{ flex: 1, height: 8, borderRadius: 1 }}
-                            color={
-                              results.validations.transparency
-                                .explanation_fidelity >= 0.8
-                                ? "success"
-                                : results.validations.transparency
-                                      .explanation_fidelity >= 0.5
-                                  ? "warning"
-                                  : "error"
-                            }
-                          />
-                          <Typography
-                            variant="caption"
-                            sx={{
-                              fontWeight: 700,
-                              minWidth: 48,
-                              textAlign: "right",
-                            }}
+                        <Box sx={{ mb: 1.5 }}>
+                          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                            Explanation Fidelity
+                          </Typography>
+                          <Box
+                            sx={{ display: "flex", alignItems: "center", gap: 1 }}
                           >
-                            {(
-                              results.validations.transparency
-                                .explanation_fidelity * 100
-                            ).toFixed(1)}
-                            %
+                            <LinearProgress
+                              variant="determinate"
+                              value={
+                                results.validations.transparency
+                                  .explanation_fidelity * 100
+                              }
+                              sx={{ flex: 1, height: 8, borderRadius: 1 }}
+                              color={
+                                results.validations.transparency
+                                  .explanation_fidelity >= 0.8
+                                  ? "success"
+                                  : results.validations.transparency
+                                    .explanation_fidelity >= 0.5
+                                    ? "warning"
+                                    : "error"
+                              }
+                            />
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                fontWeight: 700,
+                                minWidth: 48,
+                                textAlign: "right",
+                              }}
+                            >
+                              {(
+                                results.validations.transparency
+                                  .explanation_fidelity * 100
+                              ).toFixed(1)}
+                              %
+                            </Typography>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary">
+                            1 − mean(|f(x) − g(x)|) — how faithfully LIME
+                            approximates the model
                           </Typography>
                         </Box>
-                        <Typography variant="caption" color="text.secondary">
-                          1 − mean(|f(x) − g(x)|) — how faithfully LIME
-                          approximates the model
-                        </Typography>
-                      </Box>
-                    )}
+                      )}
 
                     {/* LIME Local Explanation (1 sample) */}
                     {results.validations.transparency.lime_explanations
@@ -2391,11 +2397,11 @@ export default function ValidationPage() {
                           results.validations.transparency.lime_explanations[0];
                         const contributions = lime.feature_contributions
                           ? Object.entries(lime.feature_contributions)
-                              .sort(
-                                ([, a]: any, [, b]: any) =>
-                                  Math.abs(b) - Math.abs(a),
-                              )
-                              .slice(0, 5)
+                            .sort(
+                              ([, a]: any, [, b]: any) =>
+                                Math.abs(b) - Math.abs(a),
+                            )
+                            .slice(0, 5)
                           : [];
                         const hasSignificant = contributions.some(
                           ([, w]: any) => Math.abs(w) > 1e-6,
@@ -2669,6 +2675,28 @@ export default function ValidationPage() {
             </Box>
 
             <Box sx={{ mt: 4, display: "flex", gap: 2, flexWrap: "wrap" }}>
+              {/* Certificate Button — shown only when overall_passed */}
+              {results.overall_passed && (
+                <Button
+                  variant="contained"
+                  onClick={() => setShowCertificate(true)}
+                  sx={{
+                    background:
+                      "linear-gradient(135deg, #b8860b 0%, #d4a017 50%, #b8860b 100%)",
+                    color: "#0a0f1e",
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    boxShadow: "0 4px 16px rgba(201,168,76,0.35)",
+                    "&:hover": {
+                      background:
+                        "linear-gradient(135deg, #d4a017 0%, #f0c030 50%, #d4a017 100%)",
+                      boxShadow: "0 6px 24px rgba(201,168,76,0.5)",
+                    },
+                  }}
+                >
+                  🏆 View Certificate
+                </Button>
+              )}
               <Button
                 variant="outlined"
                 onClick={() => navigate(`/projects/${id}`)}
@@ -2738,6 +2766,22 @@ export default function ValidationPage() {
           onClose={() => setSelectedFairnessMetric(null)}
           metric={selectedFairnessMetric}
         />
+
+        {/* Certificate Modal */}
+        {showCertificate && results && (
+          <CertificateModal
+            open={showCertificate}
+            onClose={() => setShowCertificate(false)}
+            recipientName={
+              user?.name || user?.email || "Valued User"
+            }
+            projectName={undefined}
+            suiteId={results.suite_id || suiteId}
+            validationsPassed={Object.keys(results.validations || {})}
+            overallPassed={!!results.overall_passed}
+            issuedAt={new Date().toISOString()}
+          />
+        )}
       </Container>
     </>
   );
