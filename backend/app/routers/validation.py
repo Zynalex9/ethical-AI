@@ -20,6 +20,7 @@ from ..models.user import User
 from ..models.project import Project
 from ..models.ml_model import MLModel
 from ..models.dataset import Dataset
+from ..models.custom_rule import CustomRule
 from ..models.requirement import Requirement
 from ..models.validation import Validation, ValidationResult, ValidationStatus
 from ..models.audit_log import AuditLog, AuditAction, ResourceType
@@ -150,6 +151,22 @@ async def verify_access(
     return True
 
 
+async def _get_project_custom_fairness_rules(
+    db: AsyncSession,
+    project_id: UUID,
+) -> List[Dict[str, Any]]:
+    """Fetch project-scoped custom fairness rules in validator input format."""
+    result = await db.execute(
+        select(CustomRule)
+        .where(
+            CustomRule.project_id == project_id,
+            CustomRule.principle == "fairness",
+        )
+        .order_by(CustomRule.created_at.desc())
+    )
+    return [rule.to_rule_dict() for rule in result.scalars().all()]
+
+
 @router.post("/fairness", response_model=FairnessResultResponse)
 async def run_fairness_validation(
     request: FairnessValidationRequest,
@@ -261,10 +278,13 @@ async def run_fairness_validation(
             y_pred=y_pred,
             sensitive_features=sensitive
         )
+
+        custom_rules = await _get_project_custom_fairness_rules(db, model_record.project_id)
         
         report = validator.validate_all(
             thresholds=thresholds,
             selected_metrics=request.selected_metrics,
+            custom_rules=custom_rules,
         )
         
         # Update validation status
@@ -396,7 +416,12 @@ async def run_fairness_from_predictions(
         }
 
         validator = FairnessValidator(y_true=y_true, y_pred=y_pred, sensitive_features=sensitive)
-        report = validator.validate_all(thresholds=thresholds, selected_metrics=request.selected_metrics)
+        custom_rules = await _get_project_custom_fairness_rules(db, dataset_record.project_id)
+        report = validator.validate_all(
+            thresholds=thresholds,
+            selected_metrics=request.selected_metrics,
+            custom_rules=custom_rules,
+        )
 
         validation.status = ValidationStatus.COMPLETED
         validation.progress = 100
@@ -946,11 +971,18 @@ async def run_all_validations(
     await db.refresh(suite)
     
     # Queue background task
+    fairness_config = dict(request.fairness_config or {})
+    if "custom_rules" not in fairness_config:
+        fairness_config["custom_rules"] = await _get_project_custom_fairness_rules(
+            db,
+            model_record.project_id,
+        )
+
     task = run_all_validations_task.delay(
         suite_id=str(suite.id),
         model_id=str(request.model_id),
         dataset_id=str(request.dataset_id),
-        fairness_config=request.fairness_config,
+        fairness_config=fairness_config,
         transparency_config=request.transparency_config,
         privacy_config=request.privacy_config,
         user_id=str(current_user.id),

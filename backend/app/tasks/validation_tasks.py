@@ -171,6 +171,7 @@ async def _run_fairness_validation_async(
     target_column: str,
     thresholds: Optional[Dict[str, float]] = None,
     selected_metrics: Optional[list] = None,
+    custom_rules: Optional[list] = None,
     user_id: Optional[str] = None,
     progress_callback=None
 ) -> Dict[str, Any]:
@@ -379,6 +380,7 @@ async def _run_fairness_validation_async(
         report = validator.validate_all(
             thresholds=thresholds,
             selected_metrics=selected_metrics,
+            custom_rules=custom_rules,
         )
         
         # Log metrics to MLflow
@@ -547,6 +549,7 @@ def run_fairness_validation_task(
     target_column: str,
     thresholds: Optional[Dict[str, float]] = None,
     selected_metrics: Optional[list] = None,
+    custom_rules: Optional[list] = None,
     user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -579,6 +582,7 @@ def run_fairness_validation_task(
                 target_column=target_column,
                 thresholds=thresholds,
                 selected_metrics=selected_metrics,
+                custom_rules=custom_rules,
                 user_id=user_id,
                 progress_callback=progress_callback
             )
