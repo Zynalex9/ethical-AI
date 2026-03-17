@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from app.config import settings
 from app.database import init_db, close_db, create_engine_and_session
 from app import database
-from app.routers import auth, projects, models, datasets, validation, templates, audit, requirements, traceability, reports, admin, notifications, remediation, custom_rules
+from app.routers import auth, projects, models, datasets, validation, templates, audit, requirements, traceability, reports, admin, notifications, remediation, custom_rules, presets
 from app.middleware.logging_config import setup_logging, get_logger
 from app.middleware.error_handler import (
     AppError,
@@ -115,6 +115,7 @@ app.include_router(admin.router, prefix=settings.api_prefix)
 app.include_router(notifications.router, prefix=settings.api_prefix)
 app.include_router(remediation.router, prefix=settings.api_prefix)
 app.include_router(custom_rules.router, prefix=settings.api_prefix)
+app.include_router(presets.router, prefix=settings.api_prefix)
 
 
 # Health check endpoint

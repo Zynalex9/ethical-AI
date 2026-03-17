@@ -11,6 +11,7 @@ from app.models.audit_log import AuditLog
 from app.models.notification import Notification
 from app.models.remediation import RemediationChecklist
 from app.models.custom_rule import CustomRule
+from app.models.validation_preset import ValidationPreset
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "Notification",
     "RemediationChecklist",
     "CustomRule",
+    "ValidationPreset",
 ]

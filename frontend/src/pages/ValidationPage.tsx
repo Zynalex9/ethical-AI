@@ -48,7 +48,7 @@ import {
   ArrowForward as NextIcon,
   Lock as LockIcon,
 } from "@mui/icons-material";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   modelsApi,
   datasetsApi,
@@ -57,9 +57,14 @@ import {
   reportsApi,
   templatesApi,
   customRulesApi,
+  presetsApi,
   getApiErrorMessage,
 } from "../services/api";
-import type { CustomRule, CustomRuleCreateInput } from "../services/api";
+import type {
+  CustomRule,
+  CustomRuleCreateInput,
+  ValidationPreset,
+} from "../services/api";
 import type { Template } from "../types";
 import FairnessMetricDetail from "../components/FairnessMetricDetail";
 import CertificateModal from "../components/CertificateModal";
@@ -239,6 +244,7 @@ export default function ValidationPage() {
   const viewSuiteId = searchParams.get("suite");
   const { user } = useAuth();
   const prefillAppliedRef = useRef(false);
+  const queryClient = useQueryClient();
 
   // Wizard step: 0=select, 1=configure, 2=results
   const [activeStep, setActiveStep] = useState(0);
@@ -251,6 +257,7 @@ export default function ValidationPage() {
 
   // Form fields
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedPresetId, setSelectedPresetId] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedDataset, setSelectedDataset] = useState("");
   const [sensitiveFeature, setSensitiveFeature] = useState("");
@@ -311,6 +318,9 @@ export default function ValidationPage() {
 
   // Certificate modal
   const [showCertificate, setShowCertificate] = useState(false);
+  const [savePresetDialogOpen, setSavePresetDialogOpen] = useState(false);
+  const [newPresetName, setNewPresetName] = useState("");
+  const [presetActionError, setPresetActionError] = useState("");
 
   // Load existing suite when navigated via ?suite=
   useEffect(() => {
@@ -397,6 +407,31 @@ export default function ValidationPage() {
     queryKey: ["templates", "validation-presets"],
     queryFn: () => templatesApi.list(),
     enabled: !!id,
+  });
+  const { data: validationPresets = [], isLoading: isLoadingValidationPresets } =
+    useQuery<ValidationPreset[]>({
+      queryKey: ["validation-presets", id],
+      queryFn: () => presetsApi.list(id!),
+      enabled: !!id,
+    });
+
+  const createPresetMutation = useMutation({
+    mutationFn: (payload: { name: string; config: Record<string, any> }) =>
+      presetsApi.create({
+        project_id: id!,
+        name: payload.name,
+        config: payload.config,
+      }),
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({ queryKey: ["validation-presets", id] });
+      setSelectedPresetId(created.id);
+      setSavePresetDialogOpen(false);
+      setNewPresetName("");
+      setPresetActionError("");
+    },
+    onError: (error: unknown) => {
+      setPresetActionError(getApiErrorMessage(error, "Failed to save preset"));
+    },
   });
   const {
     data: customFairnessRules = [],
@@ -520,6 +555,133 @@ export default function ValidationPage() {
     setLDiversityL(newL);
     setSelectedRequirements([]);
     setUseRequirementThresholds(false);
+  };
+
+  const buildValidationPresetConfig = (): Record<string, any> => ({
+    selected_validators: selectedValidators,
+    selected_model: selectedModel,
+    selected_dataset: selectedDataset,
+    sensitive_feature: sensitiveFeature,
+    target_column: targetColumn,
+    selected_fairness_metrics: selectedFairnessMetrics,
+    fairness_thresholds: fairnessThresholds,
+    selected_custom_rule_ids: selectedCustomRuleIds,
+    selected_privacy_checks: selectedPrivacyChecks,
+    k_anonymity_k: kAnonymityK,
+    k_anonymity_configs: kAnonymityConfigs.map((cfg) => ({
+      quasi_identifiers: cfg.quasi_identifiers,
+      k: cfg.k,
+    })),
+    l_diversity_l: lDiversityL,
+    quasi_identifiers: quasiIdentifiers,
+    sensitive_attribute: sensitiveAttribute,
+    custom_pii_pattern_rows: customPiiPatternRows,
+    dp_target_epsilon: dpTargetEpsilon,
+    dp_apply_noise: dpApplyNoise,
+    prediction_mode: predictionMode,
+    prediction_column: predictionColumn,
+    actual_column: actualColumn,
+    selected_requirements: selectedRequirements,
+    use_requirement_thresholds: useRequirementThresholds,
+  });
+
+  const applyValidationPreset = (preset: ValidationPreset) => {
+    const cfg = preset.config || {};
+
+    setSelectedTemplateId("");
+    setSelectedPresetId(preset.id);
+    setSelectedValidators(
+      Array.isArray(cfg.selected_validators) ? cfg.selected_validators : [],
+    );
+    setSelectedModel(typeof cfg.selected_model === "string" ? cfg.selected_model : "");
+    setSelectedDataset(typeof cfg.selected_dataset === "string" ? cfg.selected_dataset : "");
+    setSensitiveFeature(
+      typeof cfg.sensitive_feature === "string" ? cfg.sensitive_feature : "",
+    );
+    setTargetColumn(typeof cfg.target_column === "string" ? cfg.target_column : "");
+
+    setSelectedFairnessMetrics(
+      Array.isArray(cfg.selected_fairness_metrics)
+        ? cfg.selected_fairness_metrics
+        : DEFAULT_FAIRNESS_METRICS,
+    );
+    setFairnessThresholds(
+      cfg.fairness_thresholds && typeof cfg.fairness_thresholds === "object"
+        ? cfg.fairness_thresholds
+        : DEFAULT_FAIRNESS_THRESHOLDS,
+    );
+    setSelectedCustomRuleIds(
+      Array.isArray(cfg.selected_custom_rule_ids)
+        ? cfg.selected_custom_rule_ids
+        : [],
+    );
+
+    setSelectedPrivacyChecks(
+      Array.isArray(cfg.selected_privacy_checks)
+        ? cfg.selected_privacy_checks
+        : DEFAULT_PRIVACY_CHECKS,
+    );
+    setKAnonymityK(
+      typeof cfg.k_anonymity_k === "number" ? cfg.k_anonymity_k : 5,
+    );
+    setKAnonymityConfigs(
+      Array.isArray(cfg.k_anonymity_configs) && cfg.k_anonymity_configs.length > 0
+        ? cfg.k_anonymity_configs.map((item: any) => ({
+            id: makeKAnonymityConfigRow(5).id,
+            quasi_identifiers: Array.isArray(item?.quasi_identifiers)
+              ? item.quasi_identifiers
+              : [],
+            k: typeof item?.k === "number" ? item.k : 5,
+          }))
+        : [makeKAnonymityConfigRow(5)],
+    );
+    setLDiversityL(typeof cfg.l_diversity_l === "number" ? cfg.l_diversity_l : 2);
+
+    setQuasiIdentifiers(Array.isArray(cfg.quasi_identifiers) ? cfg.quasi_identifiers : []);
+    setSensitiveAttribute(
+      typeof cfg.sensitive_attribute === "string" ? cfg.sensitive_attribute : "",
+    );
+    setCustomPiiPatternRows(
+      Array.isArray(cfg.custom_pii_pattern_rows) ? cfg.custom_pii_pattern_rows : [],
+    );
+
+    setDpTargetEpsilon(
+      typeof cfg.dp_target_epsilon === "number" ? cfg.dp_target_epsilon : 1.0,
+    );
+    setDpApplyNoise(Boolean(cfg.dp_apply_noise));
+
+    setPredictionMode(cfg.prediction_mode === "dataset" ? "dataset" : "model");
+    setPredictionColumn(
+      typeof cfg.prediction_column === "string" ? cfg.prediction_column : "",
+    );
+    setActualColumn(typeof cfg.actual_column === "string" ? cfg.actual_column : "");
+
+    setSelectedRequirements(
+      Array.isArray(cfg.selected_requirements) ? cfg.selected_requirements : [],
+    );
+    setUseRequirementThresholds(Boolean(cfg.use_requirement_thresholds));
+
+    setFormError("");
+    setPresetActionError("");
+    setActiveStep(1);
+  };
+
+  const handleSavePreset = async () => {
+    const presetName = newPresetName.trim();
+    if (!presetName) {
+      setPresetActionError("Preset name is required.");
+      return;
+    }
+    if (!id) {
+      setPresetActionError("Project ID is missing.");
+      return;
+    }
+
+    setPresetActionError("");
+    await createPresetMutation.mutateAsync({
+      name: presetName,
+      config: buildValidationPresetConfig(),
+    });
   };
 
   // Poll task
@@ -905,6 +1067,7 @@ export default function ValidationPage() {
   const handleReset = () => {
     setActiveStep(0);
     setSelectedTemplateId("");
+    setSelectedPresetId("");
     setSelectedValidators([]);
     setExpandedValidator(null);
     setSelectedModel("");
@@ -934,6 +1097,9 @@ export default function ValidationPage() {
     setResults(null);
     setRunError("");
     setFormError("");
+    setPresetActionError("");
+    setNewPresetName("");
+    setSavePresetDialogOpen(false);
   };
 
   const handleDownloadSuitePdf = async () => {
@@ -1001,6 +1167,54 @@ export default function ValidationPage() {
             }}
           >
             Proceed Anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={savePresetDialogOpen}
+        onClose={() => {
+          setSavePresetDialogOpen(false);
+          setPresetActionError("");
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Save Validation Preset</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Save your current validator selections and configuration values for reuse.
+          </DialogContentText>
+          <TextField
+            autoFocus
+            fullWidth
+            label="Preset name"
+            value={newPresetName}
+            onChange={(e) => setNewPresetName(e.target.value)}
+            disabled={createPresetMutation.isPending}
+          />
+          {presetActionError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {presetActionError}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setSavePresetDialogOpen(false);
+              setPresetActionError("");
+            }}
+            disabled={createPresetMutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleSavePreset}
+            disabled={createPresetMutation.isPending}
+          >
+            {createPresetMutation.isPending ? "Saving..." : "Save Preset"}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1095,6 +1309,36 @@ export default function ValidationPage() {
 
             <Card variant="outlined" sx={{ mb: 2 }}>
               <CardContent>
+                <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700 }}>
+                  Load Saved Preset
+                </Typography>
+                <FormControl fullWidth>
+                  <InputLabel>Load Preset</InputLabel>
+                  <Select
+                    value={selectedPresetId}
+                    label="Load Preset"
+                    disabled={isLoadingValidationPresets}
+                    onChange={(e) => {
+                      const presetId = e.target.value;
+                      setSelectedPresetId(presetId);
+                      if (!presetId) return;
+                      const preset = validationPresets.find((item) => item.id === presetId);
+                      if (preset) {
+                        applyValidationPreset(preset);
+                      }
+                    }}
+                  >
+                    <MenuItem value="">
+                      <em>No saved preset</em>
+                    </MenuItem>
+                    {validationPresets.map((preset) => (
+                      <MenuItem key={preset.id} value={preset.id}>
+                        {preset.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700 }}>
                   Template Preset (Optional)
                 </Typography>
@@ -2126,13 +2370,25 @@ export default function ValidationPage() {
               <Box
                 sx={{ mt: 4, display: "flex", justifyContent: "space-between" }}
               >
-                <Button
-                  variant="outlined"
-                  startIcon={<BackIcon />}
-                  onClick={() => setActiveStep(0)}
-                >
-                  Back
-                </Button>
+                <Box sx={{ display: "flex", gap: 1 }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<BackIcon />}
+                    onClick={() => setActiveStep(0)}
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    onClick={() => {
+                      setPresetActionError("");
+                      setNewPresetName("");
+                      setSavePresetDialogOpen(true);
+                    }}
+                  >
+                    Save as Preset
+                  </Button>
+                </Box>
                 <Button
                   variant="contained"
                   size="large"

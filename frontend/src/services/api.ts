@@ -260,6 +260,21 @@ export interface SupportedCustomRuleOptions {
     comparisons: Array<'>=' | '<='>;
 }
 
+export interface ValidationPreset {
+    id: string;
+    project_id: string;
+    name: string;
+    config: Record<string, any>;
+    created_by_id: string;
+    created_at: string;
+}
+
+export interface ValidationPresetCreateInput {
+    project_id: string;
+    name: string;
+    config: Record<string, any>;
+}
+
 export const customRulesApi = {
     list: async (projectId: string, principle: 'fairness' | 'privacy' = 'fairness') => {
         const response = await api.get('/custom-rules', {
@@ -285,6 +300,29 @@ export const customRulesApi = {
     getSupportedOptions: async () => {
         const response = await api.get('/custom-rules/supported/base-metrics');
         return response.data as SupportedCustomRuleOptions;
+    },
+};
+
+export const presetsApi = {
+    list: async (projectId: string) => {
+        const response = await api.get('/presets', {
+            params: { project_id: projectId },
+        });
+        return response.data as ValidationPreset[];
+    },
+
+    create: async (data: ValidationPresetCreateInput) => {
+        const response = await api.post('/presets', data);
+        return response.data as ValidationPreset;
+    },
+
+    update: async (presetId: string, data: Partial<Omit<ValidationPresetCreateInput, 'project_id'>>) => {
+        const response = await api.put(`/presets/${presetId}`, data);
+        return response.data as ValidationPreset;
+    },
+
+    remove: async (presetId: string) => {
+        await api.delete(`/presets/${presetId}`);
     },
 };
 
