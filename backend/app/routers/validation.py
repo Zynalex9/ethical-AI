@@ -51,6 +51,14 @@ def _json_safe(obj: Any) -> Any:
 
 
 # Request/Response models
+class CustomFairnessRuleInput(BaseModel):
+    name: str
+    base_metric: str
+    aggregation: str
+    comparison: str = ">="
+    default_threshold: float = 0.8
+
+
 class FairnessValidationRequest(BaseModel):
     model_id: UUID
     dataset_id: UUID
@@ -58,6 +66,7 @@ class FairnessValidationRequest(BaseModel):
     target_column: Optional[str] = None  # Optional - if not provided, uses predictions
     thresholds: Optional[Dict[str, float]] = None
     selected_metrics: Optional[List[str]] = None
+    custom_rules: Optional[List[CustomFairnessRuleInput]] = None
 
 
 class FairnessFromPredictionsRequest(BaseModel):
@@ -71,6 +80,7 @@ class FairnessFromPredictionsRequest(BaseModel):
     actual_column: Optional[str] = None   # ground-truth column (improves metric set when provided)
     thresholds: Optional[Dict[str, float]] = None
     selected_metrics: Optional[List[str]] = None
+    custom_rules: Optional[List[CustomFairnessRuleInput]] = None
 
 
 class TransparencyValidationRequest(BaseModel):
@@ -279,7 +289,11 @@ async def run_fairness_validation(
             sensitive_features=sensitive
         )
 
-        custom_rules = await _get_project_custom_fairness_rules(db, model_record.project_id)
+        custom_rules = (
+            [rule.model_dump() for rule in request.custom_rules]
+            if request.custom_rules
+            else await _get_project_custom_fairness_rules(db, model_record.project_id)
+        )
         
         report = validator.validate_all(
             thresholds=thresholds,
@@ -416,7 +430,11 @@ async def run_fairness_from_predictions(
         }
 
         validator = FairnessValidator(y_true=y_true, y_pred=y_pred, sensitive_features=sensitive)
-        custom_rules = await _get_project_custom_fairness_rules(db, dataset_record.project_id)
+        custom_rules = (
+            [rule.model_dump() for rule in request.custom_rules]
+            if request.custom_rules
+            else await _get_project_custom_fairness_rules(db, dataset_record.project_id)
+        )
         report = validator.validate_all(
             thresholds=thresholds,
             selected_metrics=request.selected_metrics,

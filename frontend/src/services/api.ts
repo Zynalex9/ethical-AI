@@ -193,6 +193,64 @@ export const datasetsApi = {
     },
 };
 
+export interface CustomRule {
+    id: string;
+    project_id: string;
+    name: string;
+    description?: string | null;
+    principle: 'fairness' | 'privacy';
+    base_metric: string;
+    aggregation: 'min_ratio' | 'max_difference';
+    comparison: '>=' | '<=';
+    default_threshold: number;
+    created_by_id?: string | null;
+}
+
+export interface CustomRuleCreateInput {
+    project_id: string;
+    name: string;
+    description?: string;
+    principle: 'fairness' | 'privacy';
+    base_metric: string;
+    aggregation: 'min_ratio' | 'max_difference';
+    comparison: '>=' | '<=';
+    default_threshold: number;
+}
+
+export interface SupportedCustomRuleOptions {
+    base_metrics: string[];
+    aggregations: Array<'min_ratio' | 'max_difference'>;
+    comparisons: Array<'>=' | '<='>;
+}
+
+export const customRulesApi = {
+    list: async (projectId: string, principle: 'fairness' | 'privacy' = 'fairness') => {
+        const response = await api.get('/custom-rules', {
+            params: { project_id: projectId, principle },
+        });
+        return response.data as CustomRule[];
+    },
+
+    create: async (data: CustomRuleCreateInput) => {
+        const response = await api.post('/custom-rules', data);
+        return response.data as CustomRule;
+    },
+
+    update: async (ruleId: string, data: Partial<Omit<CustomRuleCreateInput, 'project_id' | 'principle'>>) => {
+        const response = await api.put(`/custom-rules/${ruleId}`, data);
+        return response.data as CustomRule;
+    },
+
+    remove: async (ruleId: string) => {
+        await api.delete(`/custom-rules/${ruleId}`);
+    },
+
+    getSupportedOptions: async () => {
+        const response = await api.get('/custom-rules/supported/base-metrics');
+        return response.data as SupportedCustomRuleOptions;
+    },
+};
+
 // Validation API
 export const validationApi = {
     // Run selected validations in background
@@ -205,6 +263,13 @@ export const validationApi = {
             target_column: string | null;
             selected_metrics?: string[];
             thresholds?: Record<string, number>;
+            custom_rules?: Array<{
+                name: string;
+                base_metric: string;
+                aggregation: 'min_ratio' | 'max_difference';
+                comparison: '>=' | '<=';
+                default_threshold: number;
+            }>;
         };
         transparency_config: {
             target_column: string | null;
@@ -283,6 +348,13 @@ export const validationApi = {
         actual_column?: string | null;
         thresholds?: Record<string, number>;
         selected_metrics?: string[];
+        custom_rules?: Array<{
+            name: string;
+            base_metric: string;
+            aggregation: 'min_ratio' | 'max_difference';
+            comparison: '>=' | '<=';
+            default_threshold: number;
+        }>;
     }) => {
         const response = await api.post('/validate/fairness-from-predictions', data);
         return response.data;

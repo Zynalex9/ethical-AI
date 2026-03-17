@@ -56,10 +56,14 @@ import {
   requirementsApi,
   reportsApi,
   templatesApi,
+  customRulesApi,
+  getApiErrorMessage,
 } from "../services/api";
+import type { CustomRule, CustomRuleCreateInput } from "../services/api";
 import type { Template } from "../types";
 import FairnessMetricDetail from "../components/FairnessMetricDetail";
 import CertificateModal from "../components/CertificateModal";
+import CustomRuleEditor from "../components/CustomRuleEditor";
 import { useAuth } from "../contexts/AuthContext";
 
 // ─── Validator definitions ────────────────────────────────────────────────────
@@ -249,6 +253,9 @@ export default function ValidationPage() {
   const [fairnessThresholds, setFairnessThresholds] = useState<
     Record<string, number>
   >(DEFAULT_FAIRNESS_THRESHOLDS);
+  const [selectedCustomRuleIds, setSelectedCustomRuleIds] = useState<string[]>(
+    [],
+  );
   const [selectedPrivacyChecks, setSelectedPrivacyChecks] = useState<string[]>(
     DEFAULT_PRIVACY_CHECKS,
   );
@@ -325,10 +332,33 @@ export default function ValidationPage() {
     queryFn: () => templatesApi.list(),
     enabled: !!id,
   });
+  const {
+    data: customFairnessRules = [],
+    refetch: refetchCustomFairnessRules,
+    isLoading: isLoadingCustomFairnessRules,
+  } = useQuery<CustomRule[]>({
+    queryKey: ["custom-rules", id, "fairness"],
+    queryFn: () => customRulesApi.list(id!, "fairness"),
+    enabled: !!id,
+  });
+  const { data: customRuleOptions, isLoading: isLoadingCustomRuleOptions } =
+    useQuery({
+      queryKey: ["custom-rules", "supported-options"],
+      queryFn: () => customRulesApi.getSupportedOptions(),
+      enabled: !!id,
+    });
   const selectedDatasetObj = datasets?.find(
     (d: any) => d.id === selectedDataset,
   );
   const isTemplatePresetActive = selectedTemplateId !== "";
+
+  useEffect(() => {
+    setSelectedCustomRuleIds((prev) =>
+      prev.filter((ruleId) =>
+        customFairnessRules.some((rule) => rule.id === ruleId),
+      ),
+    );
+  }, [customFairnessRules]);
 
   const applyTemplatePreset = (template: Template) => {
     const validatorSet = new Set<string>();
@@ -467,6 +497,51 @@ export default function ValidationPage() {
     );
   };
 
+  const toggleCustomRule = (ruleId: string) => {
+    if (isTemplatePresetActive) return;
+    setSelectedCustomRuleIds((prev) =>
+      prev.includes(ruleId)
+        ? prev.filter((idVal) => idVal !== ruleId)
+        : [...prev, ruleId],
+    );
+  };
+
+  const handleSaveCustomRule = async (payload: CustomRuleCreateInput) => {
+    try {
+      const created = await customRulesApi.create(payload);
+      setSelectedCustomRuleIds((prev) =>
+        prev.includes(created.id) ? prev : [...prev, created.id],
+      );
+      await refetchCustomFairnessRules();
+    } catch (error: unknown) {
+      throw new Error(getApiErrorMessage(error, "Failed to save custom rule"));
+    }
+  };
+
+  const selectedCustomFairnessRules = customFairnessRules.filter((rule) =>
+    selectedCustomRuleIds.includes(rule.id),
+  );
+
+  const buildCustomRulesPayload = () =>
+    selectedCustomFairnessRules.map((rule) => ({
+      name: rule.name,
+      base_metric: rule.base_metric,
+      aggregation: rule.aggregation,
+      comparison: rule.comparison,
+      default_threshold: Number(rule.default_threshold),
+    }));
+
+  const buildFairnessThresholdPayload = () => {
+    const payload: Record<string, number> = {};
+    selectedFairnessMetrics.forEach((metricName) => {
+      payload[metricName] = fairnessThresholds[metricName];
+    });
+    selectedCustomFairnessRules.forEach((rule) => {
+      payload[rule.name] = Number(rule.default_threshold);
+    });
+    return payload;
+  };
+
   const togglePrivacyCheck = (check: string) => {
     if (isTemplatePresetActive) return;
     setSelectedPrivacyChecks((prev) =>
@@ -498,9 +573,10 @@ export default function ValidationPage() {
     }
     if (
       selectedValidators.includes("fairness") &&
-      selectedFairnessMetrics.length === 0
+      selectedFairnessMetrics.length === 0 &&
+      selectedCustomRuleIds.length === 0
     ) {
-      return "Please select at least one fairness metric.";
+      return "Please select at least one fairness metric or custom fairness rule.";
     }
     if (
       selectedValidators.includes("privacy") &&
@@ -610,13 +686,8 @@ export default function ValidationPage() {
           prediction_column: predictionColumn,
           actual_column: actualColumn || null,
           selected_metrics: selectedFairnessMetrics,
-          thresholds: selectedFairnessMetrics.reduce(
-            (acc, m) => {
-              acc[m] = fairnessThresholds[m];
-              return acc;
-            },
-            {} as Record<string, number>,
-          ),
+          custom_rules: buildCustomRulesPayload(),
+          thresholds: buildFairnessThresholdPayload(),
         });
         // Wrap the result in a pseudo-suite shape so results render correctly
         setResults({
@@ -647,13 +718,8 @@ export default function ValidationPage() {
           sensitive_feature: sensitiveFeature,
           target_column: targetColumn || null,
           selected_metrics: selectedFairnessMetrics,
-          thresholds: selectedFairnessMetrics.reduce(
-            (acc, metricName) => {
-              acc[metricName] = fairnessThresholds[metricName];
-              return acc;
-            },
-            {} as Record<string, number>,
-          ),
+          custom_rules: buildCustomRulesPayload(),
+          thresholds: buildFairnessThresholdPayload(),
         },
         transparency_config: {
           target_column: targetColumn || null,
@@ -694,6 +760,7 @@ export default function ValidationPage() {
     setSensitiveAttribute("");
     setSelectedFairnessMetrics(DEFAULT_FAIRNESS_METRICS);
     setFairnessThresholds(DEFAULT_FAIRNESS_THRESHOLDS);
+    setSelectedCustomRuleIds([]);
     setSelectedPrivacyChecks(DEFAULT_PRIVACY_CHECKS);
     setKAnonymityK(5);
     setLDiversityL(2);
@@ -1574,6 +1641,19 @@ export default function ValidationPage() {
                         </Box>
                       </Box>
                     )}
+
+                    <Box>
+                      <CustomRuleEditor
+                        projectId={id || ""}
+                        rules={customFairnessRules}
+                        selectedRuleIds={selectedCustomRuleIds}
+                        options={customRuleOptions}
+                        loadingOptions={isLoadingCustomRuleOptions}
+                        disabled={isTemplatePresetActive || isLoadingCustomFairnessRules}
+                        onToggleRule={toggleCustomRule}
+                        onSaveRule={handleSaveCustomRule}
+                      />
+                    </Box>
                   </>
                 )}
 
