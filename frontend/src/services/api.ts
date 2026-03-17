@@ -161,6 +161,38 @@ export const modelsApi = {
 };
 
 // Datasets API
+export interface DatasetProfileTopValue {
+    value: string;
+    count: number;
+}
+
+export interface DatasetNumericStats {
+    min: number | null;
+    max: number | null;
+    mean: number | null;
+    median: number | null;
+    std: number | null;
+}
+
+export interface DatasetColumnProfile {
+    column: string;
+    dtype: string;
+    unique_count: number;
+    null_count: number;
+    null_percentage: number;
+    numeric_stats?: DatasetNumericStats | null;
+    categorical_top_values?: DatasetProfileTopValue[] | null;
+}
+
+export interface DatasetProfileResponse {
+    id: string;
+    name: string;
+    row_count: number;
+    rows_profiled: number;
+    column_count: number;
+    columns: DatasetColumnProfile[];
+}
+
 export const datasetsApi = {
     upload: async (
         projectId: string,
@@ -185,6 +217,11 @@ export const datasetsApi = {
     list: async (projectId: string) => {
         const response = await api.get(`/datasets/project/${projectId}`);
         return response.data;
+    },
+
+    getProfile: async (datasetId: string) => {
+        const response = await api.get(`/datasets/${datasetId}/profile`);
+        return response.data as DatasetProfileResponse;
     },
 
     delete: async (datasetId: string) => {

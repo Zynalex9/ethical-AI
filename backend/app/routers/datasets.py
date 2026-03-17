@@ -2,7 +2,7 @@
 
 import os
 import shutil
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 from pathlib import Path
 from datetime import datetime, timezone
@@ -49,16 +49,23 @@ class DatasetResponse(BaseModel):
         from_attributes = True
 
 
+class DatasetColumnProfile(BaseModel):
+    column: str
+    dtype: str
+    unique_count: int
+    null_count: int
+    null_percentage: float
+    numeric_stats: Optional[Dict[str, Optional[float]]] = None
+    categorical_top_values: Optional[List[Dict[str, Any]]] = None
+
+
 class DatasetProfileResponse(BaseModel):
     id: UUID
     name: str
     row_count: int
+    rows_profiled: int
     column_count: int
-    columns: List[str]
-    column_types: dict
-    missing_values: dict
-    unique_counts: dict
-    sample_data: List[dict]
+    columns: List[DatasetColumnProfile]
 
 
 @router.post("/upload", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
@@ -360,7 +367,7 @@ async def get_dataset_profile(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get detailed profile of a dataset including sample data."""
+    """Get dataset column profile statistics using up to first 10k rows."""
     result = await db.execute(
         select(Dataset).where(Dataset.id == dataset_id)
     )
@@ -378,25 +385,61 @@ async def get_dataset_profile(
     if current_user.role.value != "admin" and project.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Read sample data
     try:
-        df = pd.read_csv(dataset.file_path, nrows=10)
-        sample_data = df.to_dict(orient="records")
-    except Exception:
-        sample_data = []
-    
-    profile = dataset.profile_data or {}
-    
+        max_rows = 10_000
+        df = pd.read_csv(dataset.file_path, nrows=max_rows)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to profile dataset: {exc}")
+
+    rows_profiled = len(df)
+    column_profiles: List[DatasetColumnProfile] = []
+
+    for col in df.columns:
+        series = df[col]
+        null_count = int(series.isna().sum())
+        unique_count = int(series.nunique(dropna=True))
+        null_percentage = round((null_count / rows_profiled) * 100, 3) if rows_profiled > 0 else 0.0
+
+        numeric_stats: Optional[Dict[str, Optional[float]]] = None
+        categorical_top_values: Optional[List[Dict[str, Any]]] = None
+
+        if pd.api.types.is_numeric_dtype(series):
+            numeric_stats = {
+                "min": float(series.min()) if series.notna().any() else None,
+                "max": float(series.max()) if series.notna().any() else None,
+                "mean": float(series.mean()) if series.notna().any() else None,
+                "median": float(series.median()) if series.notna().any() else None,
+                "std": float(series.std()) if series.notna().any() else None,
+            }
+        else:
+            value_counts = series.value_counts(dropna=False).head(10)
+            categorical_top_values = []
+            for value, count in value_counts.items():
+                display = "<NULL>" if pd.isna(value) else str(value)
+                categorical_top_values.append({
+                    "value": display,
+                    "count": int(count),
+                })
+
+        column_profiles.append(
+            DatasetColumnProfile(
+                column=str(col),
+                dtype=str(series.dtype),
+                unique_count=unique_count,
+                null_count=null_count,
+                null_percentage=null_percentage,
+                numeric_stats=numeric_stats,
+                categorical_top_values=categorical_top_values,
+            )
+        )
+
     return DatasetProfileResponse(
         id=dataset.id,
         name=dataset.name,
         row_count=dataset.row_count,
+        rows_profiled=rows_profiled,
         column_count=dataset.column_count,
-        columns=dataset.columns or [],
-        column_types=profile.get("column_types", {}),
-        missing_values=profile.get("missing_values", {}),
-        unique_counts=profile.get("unique_counts", {}),
-        sample_data=sample_data
+        columns=column_profiles,
     )
 
 

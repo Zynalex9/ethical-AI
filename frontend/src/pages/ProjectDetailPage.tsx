@@ -50,6 +50,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { projectsApi, modelsApi, datasetsApi, validationApi, requirementsApi, traceabilityApi, templatesApi, getApiErrorMessage } from '../services/api';
 import BenchmarkDatasetLoader from '../components/BenchmarkDatasetLoader';
 import TraceabilityMatrix from '../components/TraceabilityMatrix';
+import DatasetProfile from '../components/DatasetProfile';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { Template } from '../types';
 
@@ -300,6 +301,9 @@ export default function ProjectDetailPage() {
     const [error, setError] = useState('');
     const [compareSelected, setCompareSelected] = useState<Set<string>>(new Set());
     const [compareModalOpen, setCompareModalOpen] = useState(false);
+    const [profileDatasetId, setProfileDatasetId] = useState<string>('');
+    const [profileQuasiIdentifiers, setProfileQuasiIdentifiers] = useState<string[]>([]);
+    const [profileSensitiveAttribute, setProfileSensitiveAttribute] = useState<string>('');
 
     const MAX_UPLOAD_SIZE_BYTES = 500 * 1024 * 1024;
     const MODEL_EXTENSIONS = new Set(['.pkl', '.joblib', '.pickle', '.h5', '.keras', '.pt', '.pth', '.onnx']);
@@ -373,6 +377,42 @@ export default function ProjectDetailPage() {
         enabled: !!id && tab === 4,
         refetchOnMount: 'always',
     });
+
+    const { data: datasetProfile, isLoading: datasetProfileLoading } = useQuery({
+        queryKey: ['dataset-profile', profileDatasetId],
+        queryFn: () => datasetsApi.getProfile(profileDatasetId),
+        enabled: !!profileDatasetId,
+    });
+
+    const handleOpenProfile = (datasetId: string) => {
+        setProfileDatasetId(datasetId);
+        setProfileQuasiIdentifiers([]);
+        setProfileSensitiveAttribute('');
+    };
+
+    const toggleProfileQuasiIdentifier = (column: string) => {
+        setProfileQuasiIdentifiers((prev) =>
+            prev.includes(column) ? prev.filter((item) => item !== column) : [...prev, column],
+        );
+    };
+
+    const openValidationWithProfileSelection = () => {
+        if (!profileDatasetId) {
+            navigate(`/projects/${id}/validate`);
+            return;
+        }
+
+        const params = new URLSearchParams();
+        params.set('dataset_id', profileDatasetId);
+        params.set('selected_validators', 'privacy');
+        if (profileQuasiIdentifiers.length > 0) {
+            params.set('quasi_identifiers', profileQuasiIdentifiers.join(','));
+        }
+        if (profileSensitiveAttribute) {
+            params.set('sensitive_attribute', profileSensitiveAttribute);
+        }
+        navigate(`/projects/${id}/validate?${params.toString()}`);
+    };
 
     // Upload model
     const handleModelUpload = async (file: File) => {
@@ -657,55 +697,89 @@ export default function ProjectDetailPage() {
                         </CardContent>
                     </Card>
                 ) : (
-                    <TableContainer component={Card}>
-                        <Table>
-                            <TableHead>
-                                <TableRow>
-                                    <TableCell>Name</TableCell>
-                                    <TableCell>Rows</TableCell>
-                                    <TableCell>Columns</TableCell>
-                                    <TableCell>Sensitive Attrs</TableCell>
-                                    <TableCell>Uploaded</TableCell>
-                                    <TableCell align="right">Actions</TableCell>
-                                </TableRow>
-                            </TableHead>
-                            <TableBody>
-                                {datasets?.map((dataset: any) => (
-                                    <TableRow key={dataset.id}>
-                                        <TableCell>
-                                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                                                <DatasetIcon sx={{ mr: 1, color: 'secondary.main' }} />
-                                                {dataset.name}
-                                            </Box>
-                                        </TableCell>
-                                        <TableCell>{dataset.row_count?.toLocaleString()}</TableCell>
-                                        <TableCell>{dataset.column_count}</TableCell>
-                                        <TableCell>
-                                            {dataset.sensitive_attributes?.length > 0 ? (
-                                                dataset.sensitive_attributes.map((attr: string) => (
-                                                    <Chip key={attr} label={attr} size="small" sx={{ mr: 0.5 }} />
-                                                ))
-                                            ) : (
-                                                <Typography variant="body2" color="text.disabled">None</Typography>
-                                            )}
-                                        </TableCell>
-                                        <TableCell>
-                                            {new Date(dataset.uploaded_at).toLocaleDateString()}
-                                        </TableCell>
-                                        <TableCell align="right">
-                                            <IconButton
-                                                size="small"
-                                                color="error"
-                                                onClick={() => handleDeleteDataset(dataset.id)}
-                                            >
-                                                <DeleteIcon />
-                                            </IconButton>
-                                        </TableCell>
+                    <>
+                        <TableContainer component={Card}>
+                            <Table>
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>Name</TableCell>
+                                        <TableCell>Rows</TableCell>
+                                        <TableCell>Columns</TableCell>
+                                        <TableCell>Sensitive Attrs</TableCell>
+                                        <TableCell>Uploaded</TableCell>
+                                        <TableCell align="right">Actions</TableCell>
                                     </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </TableContainer>
+                                </TableHead>
+                                <TableBody>
+                                    {datasets?.map((dataset: any) => (
+                                        <TableRow key={dataset.id}>
+                                            <TableCell>
+                                                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                                                    <DatasetIcon sx={{ mr: 1, color: 'secondary.main' }} />
+                                                    {dataset.name}
+                                                </Box>
+                                            </TableCell>
+                                            <TableCell>{dataset.row_count?.toLocaleString()}</TableCell>
+                                            <TableCell>{dataset.column_count}</TableCell>
+                                            <TableCell>
+                                                {dataset.sensitive_attributes?.length > 0 ? (
+                                                    dataset.sensitive_attributes.map((attr: string) => (
+                                                        <Chip key={attr} label={attr} size="small" sx={{ mr: 0.5 }} />
+                                                    ))
+                                                ) : (
+                                                    <Typography variant="body2" color="text.disabled">None</Typography>
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                {new Date(dataset.uploaded_at).toLocaleDateString()}
+                                            </TableCell>
+                                            <TableCell align="right">
+                                                <Button
+                                                    size="small"
+                                                    variant={profileDatasetId === dataset.id ? 'contained' : 'outlined'}
+                                                    sx={{ mr: 1 }}
+                                                    onClick={() => handleOpenProfile(dataset.id)}
+                                                >
+                                                    Profile
+                                                </Button>
+                                                <IconButton
+                                                    size="small"
+                                                    color="error"
+                                                    onClick={() => handleDeleteDataset(dataset.id)}
+                                                >
+                                                    <DeleteIcon />
+                                                </IconButton>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+
+                        {profileDatasetId && (
+                            <Box sx={{ mt: 2 }}>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                                        Column Profiling
+                                    </Typography>
+                                    <Button variant="contained" onClick={openValidationWithProfileSelection}>
+                                        Validate With Selected Columns
+                                    </Button>
+                                </Stack>
+                                {datasetProfileLoading ? (
+                                    <CircularProgress sx={{ mt: 2 }} />
+                                ) : datasetProfile ? (
+                                    <DatasetProfile
+                                        profile={datasetProfile}
+                                        selectedQuasiIdentifiers={profileQuasiIdentifiers}
+                                        selectedSensitiveAttribute={profileSensitiveAttribute}
+                                        onToggleQuasiIdentifier={toggleProfileQuasiIdentifier}
+                                        onSetSensitiveAttribute={setProfileSensitiveAttribute}
+                                    />
+                                ) : null}
+                            </Box>
+                        )}
+                    </>
                 )}
             </TabPanel>
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Box,
@@ -238,6 +238,7 @@ export default function ValidationPage() {
   const [searchParams] = useSearchParams();
   const viewSuiteId = searchParams.get("suite");
   const { user } = useAuth();
+  const prefillAppliedRef = useRef(false);
 
   // Wizard step: 0=select, 1=configure, 2=results
   const [activeStep, setActiveStep] = useState(0);
@@ -326,6 +327,56 @@ export default function ValidationPage() {
       })();
     }
   }, [viewSuiteId]);
+
+  useEffect(() => {
+    if (prefillAppliedRef.current || viewSuiteId) return;
+
+    const datasetId = searchParams.get("dataset_id");
+    const validatorsParam = searchParams.get("selected_validators");
+    const quasiParam = searchParams.get("quasi_identifiers");
+    const sensitiveParam = searchParams.get("sensitive_attribute");
+
+    const hasPrefill = !!datasetId || !!validatorsParam || !!quasiParam || !!sensitiveParam;
+    if (!hasPrefill) return;
+
+    if (datasetId) {
+      setSelectedDataset(datasetId);
+    }
+
+    if (validatorsParam) {
+      const validators = validatorsParam
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter((item) => ["fairness", "transparency", "privacy", "accountability"].includes(item));
+      if (validators.length > 0) {
+        setSelectedValidators(Array.from(new Set(validators)));
+      }
+    } else if (quasiParam || sensitiveParam) {
+      setSelectedValidators(["privacy"]);
+    }
+
+    if (quasiParam) {
+      const quasi = quasiParam
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (quasi.length > 0) {
+        setQuasiIdentifiers(quasi);
+        setKAnonymityConfigs((prev) => {
+          if (prev.length === 0) return [{ ...makeKAnonymityConfigRow(5), quasi_identifiers: quasi }];
+          const [first, ...rest] = prev;
+          return [{ ...first, quasi_identifiers: quasi }, ...rest];
+        });
+      }
+    }
+
+    if (sensitiveParam) {
+      setSensitiveAttribute(sensitiveParam);
+    }
+
+    setActiveStep(1);
+    prefillAppliedRef.current = true;
+  }, [searchParams, viewSuiteId]);
 
   const { data: models } = useQuery({
     queryKey: ["models", id],
