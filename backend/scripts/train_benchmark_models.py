@@ -1,10 +1,8 @@
 """
-Train quick benchmark models for local validation demos.
+Train quick benchmark model for local validation demos.
 
 Produces:
 - Adult Income classifier trained on the true `income` label.
-- German Credit classifier trained on a proxy risk label because
-  `german_credit_data.csv` does not include a ground-truth target column.
 """
 
 from __future__ import annotations
@@ -35,7 +33,6 @@ def _encode_features_for_linear_model(df: pd.DataFrame, drop_columns: list[str])
         if X[col].dtype == "object":
             X[col] = pd.factorize(X[col].astype(str))[0]
 
-    # Keep a dense numeric matrix for scikit-learn linear models.
     X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
     return X
 
@@ -59,26 +56,6 @@ def _train_logreg(X: pd.DataFrame, y: np.ndarray) -> Tuple[LogisticRegression, D
     return model, metrics
 
 
-def _build_german_proxy_target(df: pd.DataFrame) -> np.ndarray:
-    """Construct a proxy binary risk target from available German Credit attributes."""
-    checking = df["Checking account"].astype(str).str.lower()
-    saving = df["Saving accounts"].astype(str).str.lower()
-    credit_amount = pd.to_numeric(df["Credit amount"], errors="coerce").fillna(0)
-    duration = pd.to_numeric(df["Duration"], errors="coerce").fillna(0)
-    job = pd.to_numeric(df["Job"], errors="coerce").fillna(0)
-
-    score = (
-        checking.isin(["na", "little"]).astype(int)
-        + saving.isin(["na", "little"]).astype(int)
-        + (credit_amount > credit_amount.median()).astype(int)
-        + (duration > duration.median()).astype(int)
-        + (job <= 1).astype(int)
-    )
-
-    # Higher score means higher inferred risk.
-    return (score >= 3).astype(int).to_numpy()
-
-
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -88,8 +65,9 @@ def main() -> None:
         "models": {},
     }
 
-    # 1) Adult Income (true target)
+    # Adult Income Model
     adult_df = pd.read_csv(DATASET_DIR / "adult.csv")
+
     adult_target = (
         adult_df["income"]
         .astype(str)
@@ -98,6 +76,7 @@ def main() -> None:
         .astype(int)
         .to_numpy()
     )
+
     adult_X = _encode_features_for_linear_model(adult_df, ["income"])
     adult_model, adult_metrics = _train_logreg(adult_X, adult_target)
 
@@ -116,33 +95,11 @@ def main() -> None:
         "metrics": adult_metrics,
     }
 
-    # 2) German Credit (proxy target)
-    german_df = pd.read_csv(DATASET_DIR / "german_credit_data.csv")
-    german_target = _build_german_proxy_target(german_df)
-    german_X = _encode_features_for_linear_model(german_df, [])
-    german_model, german_metrics = _train_logreg(german_X, german_target)
-
-    german_model_path = OUTPUT_DIR / f"german_credit_proxy_model_{timestamp}.joblib"
-    joblib.dump(german_model, german_model_path)
-
-    metadata["models"]["german_credit_proxy"] = {
-        "path": str(german_model_path),
-        "dataset": str(DATASET_DIR / "german_credit_data.csv"),
-        "target": "proxy_risk (derived; no ground-truth label in source CSV)",
-        "features": list(german_X.columns),
-        "class_balance": {
-            "negative": int((german_target == 0).sum()),
-            "positive": int((german_target == 1).sum()),
-        },
-        "metrics": german_metrics,
-    }
-
     metadata_path = OUTPUT_DIR / f"training_metadata_{timestamp}.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     print("Training complete.")
     print(f"Adult model:  {adult_model_path}")
-    print(f"German model: {german_model_path}")
     print(f"Metadata:     {metadata_path}")
 
 

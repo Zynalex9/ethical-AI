@@ -10,6 +10,7 @@ from app.models.validation_suite import ValidationSuite
 from app.models.audit_log import AuditLog
 from app.models.notification import Notification
 from app.models.remediation import RemediationChecklist
+from app.models.custom_rule import CustomRule
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "AuditLog",
     "Notification",
     "RemediationChecklist",
+    "CustomRule",
 ]

@@ -15,13 +15,21 @@ Also provides:
 
 import io
 import base64
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 import logging
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import confusion_matrix, accuracy_score
+from sklearn.metrics import (
+    confusion_matrix,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+)
+from typing import Callable
 
 # Fairlearn imports
 from fairlearn.metrics import (
@@ -38,6 +46,94 @@ from fairlearn.metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# CUSTOM METRIC REGISTRY
+# ============================================================================
+
+# Base metrics that users can reference when building custom fairness rules.
+# Each maps a string key to a sklearn-compatible scorer function(y_true, y_pred).
+SUPPORTED_BASE_METRICS: Dict[str, Callable] = {
+    "accuracy_score": accuracy_score,
+    "precision_score": lambda y_true, y_pred: precision_score(y_true, y_pred, zero_division=0),
+    "recall_score": lambda y_true, y_pred: recall_score(y_true, y_pred, zero_division=0),
+    "f1_score": lambda y_true, y_pred: f1_score(y_true, y_pred, zero_division=0),
+    "selection_rate": selection_rate,
+    "true_positive_rate": true_positive_rate,
+    "false_positive_rate": false_positive_rate,
+    "true_negative_rate": true_negative_rate,
+    "false_negative_rate": false_negative_rate,
+}
+
+# Aggregation strategies for custom metrics.
+# "min_ratio"  → min(group_values) / max(group_values)  — passes when >= threshold
+# "max_difference" → max(group_values) - min(group_values) — passes when <= threshold
+SUPPORTED_AGGREGATIONS = {"min_ratio", "max_difference"}
+
+# Registry of custom metric names to executable callables.
+# Callables are invoked as: runner(validator, threshold_override) -> FairnessMetricResult
+CustomMetricRunner = Callable[["FairnessValidator", Optional[float]], "FairnessMetricResult"]
+CUSTOM_METRIC_REGISTRY: Dict[str, CustomMetricRunner] = {}
+
+
+def _normalize_custom_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize and validate a custom rule payload before execution/registration."""
+    name = str(rule.get("name", "")).strip()
+    if not name:
+        raise ValueError("Custom rule must include a non-empty 'name'")
+
+    base_metric = str(rule.get("base_metric", "")).strip()
+    if base_metric not in SUPPORTED_BASE_METRICS:
+        raise ValueError(
+            f"Custom rule '{name}': unsupported base_metric '{base_metric}'. "
+            f"Choose from: {list(SUPPORTED_BASE_METRICS.keys())}"
+        )
+
+    aggregation = str(rule.get("aggregation", "")).strip()
+    if aggregation not in SUPPORTED_AGGREGATIONS:
+        raise ValueError(
+            f"Custom rule '{name}': unsupported aggregation '{aggregation}'. "
+            f"Choose from: {list(SUPPORTED_AGGREGATIONS)}"
+        )
+
+    comparison = str(rule.get("comparison", ">=")).strip()
+    if comparison not in {">=", "<="}:
+        raise ValueError(
+            f"Custom rule '{name}': unsupported comparison '{comparison}'. "
+            "Choose from: ['>=', '<=']"
+        )
+
+    threshold = float(rule.get("default_threshold", 0.8))
+    if not math.isfinite(threshold):
+        raise ValueError(f"Custom rule '{name}': default_threshold must be finite")
+
+    return {
+        "name": name,
+        "base_metric": base_metric,
+        "aggregation": aggregation,
+        "comparison": comparison,
+        "default_threshold": threshold,
+    }
+
+
+def _build_custom_metric_runner(rule: Dict[str, Any]) -> Tuple[str, CustomMetricRunner]:
+    """Build an executable runner callable from a custom rule definition."""
+    normalized_rule = _normalize_custom_rule(rule)
+    name = normalized_rule["name"]
+
+    def _runner(
+        validator: "FairnessValidator",
+        threshold_override: Optional[float] = None,
+    ) -> "FairnessMetricResult":
+        rule_for_run = dict(normalized_rule)
+        if threshold_override is not None:
+            if not math.isfinite(float(threshold_override)):
+                raise ValueError(f"Custom rule '{name}': threshold override must be finite")
+            rule_for_run["default_threshold"] = float(threshold_override)
+        return validator.run_custom_metric(rule_for_run)
+
+    return name, _runner
 
 
 @dataclass
@@ -571,11 +667,83 @@ class FairnessValidator:
         buf.seek(0)
         return base64.b64encode(buf.read()).decode('utf-8')
     
+    def run_custom_metric(
+        self,
+        rule: Dict[str, Any]
+    ) -> FairnessMetricResult:
+        """
+        Run a single user-defined custom fairness metric.
+
+        A custom rule is a dict with:
+            name:              str  — unique metric name (e.g. "min_precision_ratio")
+            base_metric:       str  — key in SUPPORTED_BASE_METRICS
+            aggregation:       str  — "min_ratio" or "max_difference"
+            comparison:        str  — ">=" or "<="
+            default_threshold:  float
+
+        Returns:
+            FairnessMetricResult
+        """
+        normalized_rule = _normalize_custom_rule(rule)
+        name = normalized_rule["name"]
+        base_metric_key = normalized_rule["base_metric"]
+        aggregation = normalized_rule["aggregation"]
+        comparison = normalized_rule["comparison"]
+        threshold = normalized_rule["default_threshold"]
+
+        scorer = SUPPORTED_BASE_METRICS[base_metric_key]
+
+        # Compute per-group values using MetricFrame
+        mf = MetricFrame(
+            metrics=scorer,
+            y_true=self.y_true,
+            y_pred=self.y_pred,
+            sensitive_features=self.sensitive_features,
+        )
+
+        by_group_series = mf.by_group
+        by_group = {str(k): float(v) for k, v in by_group_series.items()}
+        group_values = list(by_group.values())
+
+        if not group_values:
+            raise ValueError(f"Custom rule '{name}': no group values computed")
+
+        # Aggregate
+        if aggregation == "min_ratio":
+            max_val = max(group_values)
+            overall_value = min(group_values) / max_val if max_val > 0 else 1.0
+        else:  # max_difference
+            overall_value = max(group_values) - min(group_values)
+
+        # Compare
+        if comparison == ">=":
+            passed = overall_value >= threshold
+        elif comparison == "<=":
+            passed = overall_value <= threshold
+        else:
+            raise ValueError(
+                f"Custom rule '{name}': unsupported comparison '{comparison}'. "
+                "Choose from: ['>=', '<=']"
+            )
+
+        return FairnessMetricResult(
+            metric_name=name,
+            overall_value=float(overall_value),
+            by_group=by_group,
+            threshold=threshold,
+            passed=passed,
+            description=(
+                f"Custom rule '{name}': {aggregation}({base_metric_key}) = {overall_value:.3f}. "
+                f"{'Passed' if passed else 'Failed'} threshold {comparison} {threshold:.2f}."
+            ),
+        )
+
     def validate_all(
         self,
         thresholds: Optional[Dict[str, float]] = None,
         selected_metrics: Optional[List[str]] = None,
-        include_visualizations: bool = True
+        include_visualizations: bool = True,
+        custom_rules: Optional[List[Dict[str, Any]]] = None,
     ) -> FairnessReport:
         """
         Run all fairness validations and generate comprehensive report.
@@ -586,6 +754,9 @@ class FairnessValidator:
             selected_metrics: Optional subset of supported fairness metric names.
                               If None/empty, all supported metrics are run.
             include_visualizations: Whether to generate visualization plots
+            custom_rules: Optional list of user-defined custom metric rule dicts.
+                          Each dict must have: name, base_metric, aggregation,
+                          comparison, default_threshold.
             
         Returns:
             FairnessReport with all metrics and optional visualizations
@@ -609,13 +780,38 @@ class FairnessValidator:
         else:
             ordered_selected = list(metric_runners.keys())
 
-        if not ordered_selected:
+        # Allow empty built-in selection when custom rules are provided
+        if not ordered_selected and not custom_rules:
             raise ValueError(
                 "No supported fairness metrics selected. "
                 f"Choose from: {list(metric_runners.keys())}"
             )
 
         metrics = [metric_runners[metric_name]() for metric_name in ordered_selected]
+
+        # Build an execution registry for this run using module defaults + request rules.
+        custom_metric_registry: Dict[str, CustomMetricRunner] = dict(CUSTOM_METRIC_REGISTRY)
+
+        # Run custom rules
+        if custom_rules:
+            for rule in custom_rules:
+                try:
+                    rule_name, runner = _build_custom_metric_runner(rule)
+                    custom_metric_registry[rule_name] = runner
+
+                    threshold_override = thresholds.get(rule_name)
+                    result = custom_metric_registry[rule_name](self, threshold_override)
+                    metrics.append(result)
+                except Exception as e:
+                    logger.error(f"Custom rule '{rule.get('name', '?')}' failed: {e}")
+                    metrics.append(FairnessMetricResult(
+                        metric_name=rule.get("name", "unknown_custom_rule"),
+                        overall_value=0.0,
+                        by_group={},
+                        threshold=float(rule.get("default_threshold", 0.0)),
+                        passed=False,
+                        description=f"Custom rule error: {str(e)[:200]}",
+                    ))
         
         # Calculate confusion matrices
         confusion_matrices = self.compute_group_confusion_matrices()
