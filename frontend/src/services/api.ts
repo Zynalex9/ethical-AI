@@ -278,9 +278,15 @@ export const validationApi = {
         privacy_config: {
             selected_checks?: string[];
             k_anonymity_k?: number;
+            k_anonymity_configs?: Array<{
+                quasi_identifiers: string[];
+                k: number;
+            }>;
             l_diversity_l?: number;
             quasi_identifiers?: string[];
             sensitive_attribute?: string;
+            custom_pii_patterns?: Record<string, string>;
+            custom_pii_column_names?: string[];
             dp_target_epsilon?: number;
             dp_apply_noise?: boolean;
         };

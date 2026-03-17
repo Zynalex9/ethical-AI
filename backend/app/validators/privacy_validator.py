@@ -156,12 +156,14 @@ class PrivacyReport:
     l_diversity: Optional[LDiversityResult]
     overall_passed: bool
     recommendations: List[str]
+    k_anonymity_configs: List[KAnonymityResult] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)  # FIX: Add warnings
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pii_results": [p.to_dict() for p in self.pii_results],
             "k_anonymity": self.k_anonymity.to_dict() if self.k_anonymity else None,
+            "k_anonymity_configs": [k.to_dict() for k in self.k_anonymity_configs],
             "l_diversity": self.l_diversity.to_dict() if self.l_diversity else None,
             "overall_passed": bool(self.overall_passed),  # Convert numpy bool_ to Python bool
             "recommendations": [str(r) for r in self.recommendations],
@@ -231,7 +233,9 @@ class PrivacyValidator:
     def detect_pii(
         self,
         columns: Optional[List[str]] = None,
-        sample_size: int = 100
+        sample_size: int = 100,
+        custom_pii_patterns: Optional[Dict[str, str]] = None,
+        custom_pii_column_names: Optional[Set[str]] = None,
     ) -> List[PIIDetectionResult]:
         """
         Detect potential PII in dataset columns.
@@ -244,6 +248,8 @@ class PrivacyValidator:
         Args:
             columns: Specific columns to check (default: all)
             sample_size: Number of rows to sample for pattern matching
+            custom_pii_patterns: Optional map of pattern name -> regex to extend built-ins
+            custom_pii_column_names: Optional set of additional normalized PII column-name tokens
             
         Returns:
             List of PIIDetectionResult for each column
@@ -253,6 +259,28 @@ class PrivacyValidator:
             raise ValueError("sample_size must be at least 1")
         
         columns = columns or self.columns
+
+        # Merge built-in and user-defined regex patterns (compiled at runtime).
+        compiled_patterns: Dict[str, re.Pattern[str]] = dict(COMPILED_PII_PATTERNS)
+        if custom_pii_patterns:
+            for pattern_name, pattern_regex in custom_pii_patterns.items():
+                if not pattern_name or not pattern_regex:
+                    raise ValueError("custom_pii_patterns keys and regex values must be non-empty")
+                try:
+                    compiled_patterns[str(pattern_name)] = re.compile(str(pattern_regex))
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid custom PII regex for '{pattern_name}': {exc}"
+                    ) from exc
+
+        # Merge built-in and user-defined PII column-name heuristics.
+        pii_column_names = set(PII_COLUMN_NAMES)
+        if custom_pii_column_names:
+            pii_column_names.update(
+                name.lower().replace('_', '').replace('-', '').replace(' ', '')
+                for name in custom_pii_column_names
+                if isinstance(name, str) and name.strip()
+            )
         
         # FIX: Validate columns exist
         invalid_cols = set(columns) - set(self.columns)
@@ -262,7 +290,12 @@ class PrivacyValidator:
         results = []
         
         for col in columns:
-            result = self._detect_pii_column(col, sample_size)
+            result = self._detect_pii_column(
+                col,
+                sample_size,
+                compiled_patterns,
+                pii_column_names,
+            )
             results.append(result)
         
         # Log summary
@@ -303,12 +336,18 @@ class PrivacyValidator:
         except (ValueError, AttributeError):
             return False
     
-    def _detect_pii_column(self, column: str, sample_size: int) -> PIIDetectionResult:
+    def _detect_pii_column(
+        self,
+        column: str,
+        sample_size: int,
+        compiled_patterns: Dict[str, re.Pattern[str]],
+        pii_column_names: Set[str],
+    ) -> PIIDetectionResult:
         """Detect PII in a single column."""
         col_lower = column.lower().replace('_', '').replace('-', '').replace(' ', '')
         
         # Method 1: Check column name
-        for pii_name in PII_COLUMN_NAMES:
+        for pii_name in pii_column_names:
             pii_name_normalized = pii_name.replace('_', '')
             if pii_name_normalized in col_lower:
                 return PIIDetectionResult(
@@ -339,7 +378,7 @@ class PrivacyValidator:
             # Convert to string only after sampling
             sample = sample.astype(str)
             
-            for pii_type, pattern in COMPILED_PII_PATTERNS.items():
+            for pii_type, pattern in compiled_patterns.items():
                 matches = []
                 valid_matches = 0
                 
@@ -722,6 +761,7 @@ class PrivacyValidator:
         
         pii_results = []
         k_anonymity = None
+        k_anonymity_configs: List[KAnonymityResult] = []
         l_diversity = None
         recommendations = []
         warnings = []
@@ -730,7 +770,10 @@ class PrivacyValidator:
         # PII Detection
         if requirements.get('pii_detection', True):
             try:
-                pii_results = self.detect_pii()
+                pii_results = self.detect_pii(
+                    custom_pii_patterns=requirements.get('custom_pii_patterns'),
+                    custom_pii_column_names=requirements.get('custom_pii_column_names'),
+                )
                 pii_found = [r for r in pii_results if r.is_pii]
                 
                 if pii_found:
@@ -803,6 +846,40 @@ class PrivacyValidator:
                 logger.error(f"k-Anonymity check failed: {e}")
                 warnings.append(f"k-Anonymity check failed: {str(e)}")
                 overall_passed = False
+
+        # Multiple k-Anonymity configurations
+        if 'k_anonymity_configs' in requirements:
+            try:
+                configs = requirements['k_anonymity_configs']
+                if not isinstance(configs, list) or not configs:
+                    raise ValueError("k_anonymity_configs must be a non-empty list")
+
+                for idx, cfg in enumerate(configs):
+                    if 'quasi_identifiers' not in cfg or 'k' not in cfg:
+                        raise ValueError(
+                            f"k_anonymity_configs[{idx}] must include 'quasi_identifiers' and 'k'"
+                        )
+
+                    cfg_result = self.check_k_anonymity(
+                        quasi_identifiers=cfg['quasi_identifiers'],
+                        k=cfg['k'],
+                    )
+                    k_anonymity_configs.append(cfg_result)
+
+                    if not cfg_result.satisfies_k:
+                        overall_passed = False
+                        recommendations.append(
+                            f"k-anonymity config #{idx + 1} failed (k={cfg['k']}, min group size={cfg_result.actual_min_k})"
+                        )
+
+                # Backward-compatible summary field: use first config when single k_anonymity not present
+                if k_anonymity is None and k_anonymity_configs:
+                    k_anonymity = k_anonymity_configs[0]
+
+            except Exception as e:
+                logger.error(f"k-Anonymity multi-config check failed: {e}")
+                warnings.append(f"k-Anonymity multi-config check failed: {str(e)}")
+                overall_passed = False
         
         # l-Diversity
         if 'l_diversity' in requirements:
@@ -848,6 +925,7 @@ class PrivacyValidator:
         return PrivacyReport(
             pii_results=pii_results,
             k_anonymity=k_anonymity,
+            k_anonymity_configs=k_anonymity_configs,
             l_diversity=l_diversity,
             overall_passed=overall_passed,
             recommendations=recommendations,

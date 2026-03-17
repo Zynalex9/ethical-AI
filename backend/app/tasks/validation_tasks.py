@@ -980,8 +980,11 @@ async def _run_privacy_validation_async(
     k_anonymity_k: int = 5,
     l_diversity_l: int = 2,
     quasi_identifiers: Optional[list] = None,
+    k_anonymity_configs: Optional[list] = None,
     sensitive_attribute: Optional[str] = None,
     selected_checks: Optional[list] = None,
+    custom_pii_patterns: Optional[Dict[str, str]] = None,
+    custom_pii_column_names: Optional[list] = None,
     user_id: Optional[str] = None,
     progress_callback=None,
     # Differential Privacy parameters
@@ -1057,14 +1060,26 @@ async def _run_privacy_validation_async(
 
         if 'pii_detection' in checks:
             requirements['pii_detection'] = True
+            if custom_pii_patterns:
+                requirements['custom_pii_patterns'] = custom_pii_patterns
+            if custom_pii_column_names:
+                requirements['custom_pii_column_names'] = set(custom_pii_column_names)
 
         if 'k_anonymity' in checks:
-            if not quasi_identifiers:
-                raise ValueError("k-anonymity selected but quasi_identifiers were not provided")
-            requirements['k_anonymity'] = {
-                'k': k_anonymity_k,
-                'quasi_identifiers': quasi_identifiers
-            }
+            if k_anonymity_configs:
+                requirements['k_anonymity_configs'] = k_anonymity_configs
+                if quasi_identifiers:
+                    requirements['k_anonymity'] = {
+                        'k': k_anonymity_k,
+                        'quasi_identifiers': quasi_identifiers,
+                    }
+            else:
+                if not quasi_identifiers:
+                    raise ValueError("k-anonymity selected but quasi_identifiers were not provided")
+                requirements['k_anonymity'] = {
+                    'k': k_anonymity_k,
+                    'quasi_identifiers': quasi_identifiers
+                }
 
         if 'l_diversity' in checks:
             if not quasi_identifiers:
@@ -1245,6 +1260,7 @@ async def _run_privacy_validation_async(
             "overall_passed": report.overall_passed,
             "pii_detected": pii_list,
             "k_anonymity": report.k_anonymity.to_dict() if report.k_anonymity else None,
+            "k_anonymity_configs": [k.to_dict() for k in report.k_anonymity_configs] if report.k_anonymity_configs else None,
             "l_diversity": report.l_diversity.to_dict() if report.l_diversity else None,
             "differential_privacy": dp_result.to_dict() if dp_result else None,
             "hipaa": hipaa_result.to_dict() if hipaa_result else None,
@@ -1312,8 +1328,11 @@ def run_privacy_validation_task(
     k_anonymity_k: int = 5,
     l_diversity_l: int = 2,
     quasi_identifiers: Optional[list] = None,
+    k_anonymity_configs: Optional[list] = None,
     sensitive_attribute: Optional[str] = None,
     selected_checks: Optional[list] = None,
+    custom_pii_patterns: Optional[Dict[str, str]] = None,
+    custom_pii_column_names: Optional[list] = None,
     user_id: Optional[str] = None,
     dp_target_epsilon: float = 1.0,
     dp_apply_noise: bool = False,
@@ -1331,8 +1350,11 @@ def run_privacy_validation_task(
                 k_anonymity_k=k_anonymity_k,
                 l_diversity_l=l_diversity_l,
                 quasi_identifiers=quasi_identifiers,
+                k_anonymity_configs=k_anonymity_configs,
                 sensitive_attribute=sensitive_attribute,
                 selected_checks=selected_checks,
+                custom_pii_patterns=custom_pii_patterns,
+                custom_pii_column_names=custom_pii_column_names,
                 user_id=user_id,
                 progress_callback=progress_callback,
                 dp_target_epsilon=dp_target_epsilon,

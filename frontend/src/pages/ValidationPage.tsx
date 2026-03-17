@@ -64,6 +64,8 @@ import type { Template } from "../types";
 import FairnessMetricDetail from "../components/FairnessMetricDetail";
 import CertificateModal from "../components/CertificateModal";
 import CustomRuleEditor from "../components/CustomRuleEditor";
+import PiiPatternEditor from "../components/PiiPatternEditor";
+import type { PiiPatternRow } from "../components/PiiPatternEditor";
 import { useAuth } from "../contexts/AuthContext";
 
 // ─── Validator definitions ────────────────────────────────────────────────────
@@ -208,6 +210,13 @@ const PRIVACY_CHECKS = [
 ];
 
 const DEFAULT_PRIVACY_CHECKS = ["pii_detection", "k_anonymity"];
+
+const makeKAnonymityConfigRow = (k = 5) => ({
+  id: Math.random().toString(36).slice(2),
+  quasi_identifiers: [] as string[],
+  k,
+});
+
 const FAIRNESS_METRIC_KEYS = new Set(FAIRNESS_METRICS.map((m) => m.key));
 const TRANSPARENCY_TEMPLATE_METRICS = new Set([
   "shap_coverage",
@@ -260,7 +269,13 @@ export default function ValidationPage() {
     DEFAULT_PRIVACY_CHECKS,
   );
   const [kAnonymityK, setKAnonymityK] = useState<number>(5);
+  const [kAnonymityConfigs, setKAnonymityConfigs] = useState<
+    Array<{ id: string; quasi_identifiers: string[]; k: number }>
+  >([makeKAnonymityConfigRow(5)]);
   const [lDiversityL, setLDiversityL] = useState<number>(2);
+  const [customPiiPatternRows, setCustomPiiPatternRows] = useState<
+    PiiPatternRow[]
+  >([]);
   const [dpTargetEpsilon, setDpTargetEpsilon] = useState<number>(1.0);
   const [dpApplyNoise, setDpApplyNoise] = useState<boolean>(false);
   const [formError, setFormError] = useState("");
@@ -446,6 +461,11 @@ export default function ValidationPage() {
     setFairnessThresholds(newThresholds);
     setSelectedPrivacyChecks(privacyChecks);
     setKAnonymityK(newK);
+    setKAnonymityConfigs([
+      {
+        ...makeKAnonymityConfigRow(newK),
+      },
+    ]);
     setLDiversityL(newL);
     setSelectedRequirements([]);
     setUseRequirementThresholds(false);
@@ -549,14 +569,57 @@ export default function ValidationPage() {
     );
   };
 
+  const addKAnonymityConfig = () => {
+    if (isTemplatePresetActive) return;
+    setKAnonymityConfigs((prev) => [...prev, makeKAnonymityConfigRow(5)]);
+  };
+
+  const removeKAnonymityConfig = (idToRemove: string) => {
+    if (isTemplatePresetActive) return;
+    setKAnonymityConfigs((prev) => {
+      const next = prev.filter((cfg) => cfg.id !== idToRemove);
+      return next.length > 0 ? next : [makeKAnonymityConfigRow(5)];
+    });
+  };
+
+  const updateKAnonymityConfig = (
+    idToUpdate: string,
+    patch: Partial<{ quasi_identifiers: string[]; k: number }>,
+  ) => {
+    if (isTemplatePresetActive) return;
+    setKAnonymityConfigs((prev) =>
+      prev.map((cfg) =>
+        cfg.id === idToUpdate ? { ...cfg, ...patch } : cfg,
+      ),
+    );
+  };
+
   const needsSensitiveFeature = selectedValidators.includes("fairness");
   const needsModel =
     selectedValidators.includes("transparency") ||
     (selectedValidators.includes("fairness") && predictionMode === "model");
   const needsQuasiIdentifiers =
-    selectedPrivacyChecks.includes("k_anonymity") ||
-    selectedPrivacyChecks.includes("l_diversity");
+    selectedPrivacyChecks.includes("l_diversity") ||
+    selectedPrivacyChecks.includes("differential_privacy");
   const needsSensitiveAttribute = selectedPrivacyChecks.includes("l_diversity");
+
+  const sanitizedKAnonymityConfigs = kAnonymityConfigs
+    .map((cfg) => ({
+      quasi_identifiers: cfg.quasi_identifiers,
+      k: Math.max(1, Math.round(cfg.k || 1)),
+    }))
+    .filter((cfg) => cfg.quasi_identifiers.length > 0);
+
+  const sanitizedCustomPiiPatterns = customPiiPatternRows.reduce(
+    (acc, row) => {
+      const name = row.name.trim();
+      const pattern = row.pattern.trim();
+      if (!name || !pattern) return acc;
+      acc[name] = pattern;
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
 
   const validateConfig = () => {
     if (!selectedDataset) return "Please select a dataset.";
@@ -587,9 +650,33 @@ export default function ValidationPage() {
     if (
       selectedValidators.includes("privacy") &&
       selectedPrivacyChecks.includes("k_anonymity") &&
-      quasiIdentifiers.length === 0
+      sanitizedKAnonymityConfigs.length === 0
     ) {
-      return "Please select Quasi-Identifiers for k-anonymity.";
+      return "Please add at least one k-anonymity configuration with quasi-identifiers.";
+    }
+    if (selectedValidators.includes("privacy")) {
+      for (const [index, cfg] of kAnonymityConfigs.entries()) {
+        if (cfg.k < 1) {
+          return `k-anonymity config #${index + 1} must have k >= 1.`;
+        }
+      }
+
+      for (const row of customPiiPatternRows) {
+        const hasName = row.name.trim().length > 0;
+        const hasPattern = row.pattern.trim().length > 0;
+        if (hasName !== hasPattern) {
+          return "Each custom PII pattern row must include both name and regex, or be left empty.";
+        }
+        if (hasPattern) {
+          try {
+            // Validate regex syntax before request.
+            // eslint-disable-next-line no-new
+            new RegExp(row.pattern);
+          } catch {
+            return `Invalid regex for pattern '${row.name || "(unnamed)"}'.`;
+          }
+        }
+      }
     }
     if (
       selectedValidators.includes("privacy") &&
@@ -644,6 +731,13 @@ export default function ValidationPage() {
 
     setFairnessThresholds(newThresholds);
     setKAnonymityK(newK);
+    setKAnonymityConfigs((prev) => {
+      if (prev.length === 0) {
+        return [makeKAnonymityConfigRow(newK)];
+      }
+      const [first, ...rest] = prev;
+      return [{ ...first, k: newK }, ...rest];
+    });
     setLDiversityL(newL);
     setUseRequirementThresholds(true);
   };
@@ -727,11 +821,21 @@ export default function ValidationPage() {
         },
         privacy_config: {
           selected_checks: selectedPrivacyChecks,
-          k_anonymity_k: kAnonymityK,
+          k_anonymity_k:
+            sanitizedKAnonymityConfigs[0]?.k ?? Math.max(1, Math.round(kAnonymityK || 1)),
+          k_anonymity_configs:
+            selectedPrivacyChecks.includes("k_anonymity")
+              ? sanitizedKAnonymityConfigs
+              : undefined,
           l_diversity_l: lDiversityL,
           quasi_identifiers:
             quasiIdentifiers.length > 0 ? quasiIdentifiers : undefined,
           sensitive_attribute: sensitiveAttribute || undefined,
+          custom_pii_patterns:
+            selectedPrivacyChecks.includes("pii_detection") &&
+            Object.keys(sanitizedCustomPiiPatterns).length > 0
+              ? sanitizedCustomPiiPatterns
+              : undefined,
           dp_target_epsilon: dpTargetEpsilon,
           dp_apply_noise: dpApplyNoise,
         },
@@ -763,7 +867,9 @@ export default function ValidationPage() {
     setSelectedCustomRuleIds([]);
     setSelectedPrivacyChecks(DEFAULT_PRIVACY_CHECKS);
     setKAnonymityK(5);
+    setKAnonymityConfigs([makeKAnonymityConfigRow(5)]);
     setLDiversityL(2);
+    setCustomPiiPatternRows([]);
     setSelectedRequirements([]);
     setUseRequirementThresholds(false);
     setPredictionMode("model");
@@ -1606,6 +1712,15 @@ export default function ValidationPage() {
                       </FormGroup>
                     </Box>
 
+                    <PiiPatternEditor
+                      rows={customPiiPatternRows}
+                      onChange={setCustomPiiPatternRows}
+                      disabled={
+                        isTemplatePresetActive ||
+                        !selectedPrivacyChecks.includes("pii_detection")
+                      }
+                    />
+
                     {selectedFairnessMetrics.length > 0 && (
                       <Box>
                         <Typography
@@ -1748,28 +1863,6 @@ export default function ValidationPage() {
                         </FormControl>
                       </Box>
 
-                      {selectedPrivacyChecks.includes("k_anonymity") && (
-                        <Box sx={{ flex: "1 1 20%", minWidth: 180 }}>
-                          <Typography
-                            variant="subtitle2"
-                            sx={{ mb: 1, fontWeight: 600 }}
-                          >
-                            k value
-                          </Typography>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            type="number"
-                            value={kAnonymityK}
-                            onChange={(e) =>
-                              setKAnonymityK(Number(e.target.value))
-                            }
-                            disabled={isTemplatePresetActive}
-                            inputProps={{ min: 1, step: 1 }}
-                          />
-                        </Box>
-                      )}
-
                       <Box sx={{ flex: "1 1 45%", minWidth: 240 }}>
                         <Typography
                           variant="subtitle2"
@@ -1833,6 +1926,99 @@ export default function ValidationPage() {
                         </Box>
                       )}
                     </Box>
+
+                    {selectedPrivacyChecks.includes("k_anonymity") && (
+                      <Box>
+                        <Box
+                          sx={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            mb: 1,
+                          }}
+                        >
+                          <Typography
+                            variant="subtitle2"
+                            sx={{ fontWeight: 600 }}
+                          >
+                            k-Anonymity Configurations
+                          </Typography>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={addKAnonymityConfig}
+                            disabled={isTemplatePresetActive || !selectedDataset}
+                          >
+                            Add another config
+                          </Button>
+                        </Box>
+
+                        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                          {kAnonymityConfigs.map((cfg, index) => (
+                            <Paper
+                              key={cfg.id}
+                              variant="outlined"
+                              sx={{ p: 1.5, display: "flex", gap: 1.5, flexWrap: "wrap", alignItems: "center" }}
+                            >
+                              <Typography variant="caption" sx={{ fontWeight: 700, minWidth: 70 }}>
+                                Config {index + 1}
+                              </Typography>
+                              <FormControl sx={{ flex: "1 1 55%", minWidth: 240 }}>
+                                <InputLabel>Select quasi-identifiers</InputLabel>
+                                <Select
+                                  multiple
+                                  value={cfg.quasi_identifiers}
+                                  label="Select quasi-identifiers"
+                                  onChange={(e) =>
+                                    updateKAnonymityConfig(cfg.id, {
+                                      quasi_identifiers: e.target.value as string[],
+                                    })
+                                  }
+                                  disabled={!selectedDataset || isTemplatePresetActive}
+                                  renderValue={(selected) => (
+                                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                                      {selected.map((val) => (
+                                        <Chip key={val} label={val} size="small" />
+                                      ))}
+                                    </Box>
+                                  )}
+                                >
+                                  {selectedDatasetObj?.columns?.map((col: string) => (
+                                    <MenuItem key={col} value={col}>
+                                      {col}
+                                    </MenuItem>
+                                  ))}
+                                </Select>
+                              </FormControl>
+
+                              <TextField
+                                size="small"
+                                type="number"
+                                label="k"
+                                value={cfg.k}
+                                onChange={(e) =>
+                                  updateKAnonymityConfig(cfg.id, {
+                                    k: Number(e.target.value),
+                                  })
+                                }
+                                inputProps={{ min: 1, step: 1 }}
+                                disabled={isTemplatePresetActive}
+                                sx={{ width: 120 }}
+                              />
+
+                              <Button
+                                size="small"
+                                color="error"
+                                onClick={() => removeKAnonymityConfig(cfg.id)}
+                                disabled={isTemplatePresetActive}
+                              >
+                                Remove
+                              </Button>
+                            </Paper>
+                          ))}
+                        </Box>
+                      </Box>
+                    )}
 
                     {/* Differential Privacy config */}
                     {selectedPrivacyChecks.includes("differential_privacy") && (
@@ -2653,6 +2839,29 @@ export default function ValidationPage() {
                           }
                           size="small"
                         />
+                      </Box>
+                    )}
+                    {results.validations.privacy.k_anonymity_configs?.length > 0 && (
+                      <Box sx={{ mb: 1.5 }}>
+                        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                          k-Anonymity Config Results:
+                        </Typography>
+                        <Box sx={{ mt: 0.5, display: "flex", flexDirection: "column", gap: 0.5 }}>
+                          {results.validations.privacy.k_anonymity_configs.map(
+                            (cfg: any, idx: number) => (
+                              <Box key={idx} sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+                                <Typography variant="caption">
+                                  #{idx + 1} (k={cfg.k_value}, min={cfg.actual_min_k})
+                                </Typography>
+                                <Chip
+                                  label={cfg.satisfies_k ? "PASSED" : "FAILED"}
+                                  color={cfg.satisfies_k ? "success" : "error"}
+                                  size="small"
+                                />
+                              </Box>
+                            ),
+                          )}
+                        </Box>
                       </Box>
                     )}
                     {results.validations.privacy.l_diversity && (

@@ -2,7 +2,7 @@
 
 import os
 import math
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 from enum import Enum
@@ -91,12 +91,19 @@ class TransparencyValidationRequest(BaseModel):
 
 
 class PrivacyValidationRequest(BaseModel):
+    class KConfig(BaseModel):
+        quasi_identifiers: List[str]
+        k: int
+
     dataset_id: UUID
     k_anonymity_k: Optional[int] = 5
     l_diversity_l: Optional[int] = 2
     quasi_identifiers: Optional[List[str]] = None
+    k_anonymity_configs: Optional[List[KConfig]] = None
     sensitive_attribute: Optional[str] = None
     selected_checks: Optional[List[str]] = None
+    custom_pii_patterns: Optional[Dict[str, str]] = None
+    custom_pii_column_names: Optional[Set[str]] = None
     # Differential Privacy config
     dp_target_epsilon: Optional[float] = 1.0
     dp_apply_noise: Optional[bool] = False
@@ -134,6 +141,7 @@ class PrivacyResultResponse(BaseModel):
     overall_passed: bool
     pii_detected: List[Dict[str, Any]]
     k_anonymity: Optional[Dict[str, Any]]
+    k_anonymity_configs: Optional[List[Dict[str, Any]]] = None
     l_diversity: Optional[Dict[str, Any]]
     recommendations: List[str]
 
@@ -683,24 +691,59 @@ async def run_privacy_validation(
 
         if 'pii_detection' in selected_checks:
             requirements['pii_detection'] = True
+            if request.custom_pii_patterns:
+                requirements['custom_pii_patterns'] = request.custom_pii_patterns
+            if request.custom_pii_column_names:
+                requirements['custom_pii_column_names'] = request.custom_pii_column_names
 
         if 'k_anonymity' in selected_checks:
-            if not request.quasi_identifiers:
-                raise HTTPException(
-                    status_code=400,
-                    detail="k-anonymity selected but quasi_identifiers were not provided"
-                )
-            # Validate columns exist
-            invalid = set(request.quasi_identifiers) - set(df.columns)
-            if invalid:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Quasi-identifier columns not found: {invalid}"
-                )
-            requirements['k_anonymity'] = {
-                'k': request.k_anonymity_k,
-                'quasi_identifiers': request.quasi_identifiers
-            }
+            if request.k_anonymity_configs:
+                normalized_configs: List[Dict[str, Any]] = []
+                for idx, cfg in enumerate(request.k_anonymity_configs):
+                    if cfg.k < 1:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"k_anonymity_configs[{idx}].k must be >= 1"
+                        )
+                    if not cfg.quasi_identifiers:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"k_anonymity_configs[{idx}].quasi_identifiers cannot be empty"
+                        )
+                    invalid = set(cfg.quasi_identifiers) - set(df.columns)
+                    if invalid:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"k_anonymity_configs[{idx}] has unknown columns: {invalid}"
+                        )
+                    normalized_configs.append({
+                        'k': cfg.k,
+                        'quasi_identifiers': cfg.quasi_identifiers,
+                    })
+
+                requirements['k_anonymity_configs'] = normalized_configs
+                if request.quasi_identifiers:
+                    requirements['k_anonymity'] = {
+                        'k': request.k_anonymity_k,
+                        'quasi_identifiers': request.quasi_identifiers,
+                    }
+            else:
+                if not request.quasi_identifiers:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="k-anonymity selected but quasi_identifiers were not provided"
+                    )
+                # Validate columns exist
+                invalid = set(request.quasi_identifiers) - set(df.columns)
+                if invalid:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Quasi-identifier columns not found: {invalid}"
+                    )
+                requirements['k_anonymity'] = {
+                    'k': request.k_anonymity_k,
+                    'quasi_identifiers': request.quasi_identifiers
+                }
 
         if 'l_diversity' in selected_checks:
             if not request.quasi_identifiers:
@@ -760,6 +803,7 @@ async def run_privacy_validation(
             overall_passed=report.overall_passed,
             pii_detected=pii_list,
             k_anonymity=report.k_anonymity.to_dict() if report.k_anonymity else None,
+            k_anonymity_configs=[k.to_dict() for k in report.k_anonymity_configs] if report.k_anonymity_configs else None,
             l_diversity=report.l_diversity.to_dict() if report.l_diversity else None,
             recommendations=report.recommendations
         )
