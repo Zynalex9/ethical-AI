@@ -54,6 +54,11 @@ import DatasetProfile from '../components/DatasetProfile';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { Template } from '../types';
 
+const formatChartNumber = (value: unknown): string => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed.toFixed(2) : String(value ?? '');
+};
+
 interface TabPanelProps {
     children?: React.ReactNode;
     index: number;
@@ -995,8 +1000,8 @@ export default function ProjectDetailPage() {
                                             <LineChart data={chartData}>
                                                 <CartesianGrid strokeDasharray="3 3" />
                                                 <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                                                <YAxis tick={{ fontSize: 11 }} domain={[0, 'auto']} />
-                                                <RechartsTooltip />
+                                                <YAxis tick={{ fontSize: 11 }} domain={[0, 'auto']} tickFormatter={formatChartNumber} />
+                                                <RechartsTooltip formatter={(value) => formatChartNumber(value)} />
                                                 <Legend />
                                                 {Array.from(metricKeys).map((key, idx) => (
                                                     <Line

@@ -1,5 +1,6 @@
 import { Box, Card, CardContent, Typography, Table, TableBody, TableCell, TableHead, TableRow, Paper } from '@mui/material';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend, Cell } from 'recharts';
+import type { ValueType } from 'recharts/types/component/DefaultTooltipContent';
 
 interface FairnessMetric {
     name: string;
@@ -56,7 +57,19 @@ function buildGroupData(metrics: FairnessMetric[]): { group: string; rate: numbe
 const GROUP_COLORS = ['#3b82f6', '#14b8a6', '#f59e0b', '#a855f7', '#ef4444', '#22c55e'];
 
 /** Round to 2 decimal places for tooltip display */
-const fmt2dp = (v: number | undefined) => (v == null ? '' : Number(v).toFixed(2));
+const toNumber = (value: ValueType | undefined): number | undefined => {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+};
+
+const fmt2dp = (value: ValueType | undefined) => {
+    const n = toNumber(value);
+    return n == null ? '' : n.toFixed(2);
+};
 
 export default function FairnessVisualization({ metrics, confusion_matrices }: FairnessVisualizationProps) {
     const barData = metrics.map((m) => ({ metric: m.name, value: m.value, threshold: m.threshold }));
@@ -86,7 +99,7 @@ export default function FairnessVisualization({ metrics, confusion_matrices }: F
                                 <CartesianGrid strokeDasharray="3 3" />
                                 <XAxis dataKey="metric" angle={-20} textAnchor="end" height={70} />
                                 <YAxis />
-                                <Tooltip formatter={(v: number | undefined) => fmt2dp(v)} />
+                                <Tooltip formatter={(value) => fmt2dp(value)} />
                                 <Legend verticalAlign="top" />
                                 <Bar dataKey="value" name="Actual Value" fill="#3b82f6" />
                                 <Bar dataKey="threshold" name="Threshold" fill="#f59e0b" />
@@ -118,7 +131,10 @@ export default function FairnessVisualization({ metrics, confusion_matrices }: F
                                     <XAxis dataKey="group" />
                                     <YAxis domain={[0, 1]} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
                                     <Tooltip
-                                        formatter={(value: number | undefined) => [value == null ? 'N/A' : `${(value * 100).toFixed(2)}%`, 'Selection Rate']}
+                                        formatter={(value) => {
+                                            const n = toNumber(value);
+                                            return [n == null ? 'N/A' : `${(n * 100).toFixed(2)}%`, 'Selection Rate'];
+                                        }}
                                     />
                                     <Bar dataKey="rate" name="Selection Rate" radius={[4, 4, 0, 0]}>
                                         {groupData.map((_, idx) => (
@@ -168,7 +184,7 @@ export default function FairnessVisualization({ metrics, confusion_matrices }: F
                                 <Radar name="Actual" dataKey="actual" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.35} />
                                 <Radar name="Threshold" dataKey="threshold" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} />
                                 <Legend />
-                                <Tooltip formatter={(v: number | undefined) => fmt2dp(v)} />
+                                <Tooltip formatter={(value) => fmt2dp(value)} />
                             </RadarChart>
                         </ResponsiveContainer>
                     </Box>
