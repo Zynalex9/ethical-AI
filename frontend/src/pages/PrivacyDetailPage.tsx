@@ -180,89 +180,113 @@ export default function PrivacyDetailPage() {
                 </CardContent>
             </Card>
 
-            {/* k-Anonymity Section */}
-            {privacyData.k_anonymity && (
-                <Card sx={{ mb: 3 }}>
-                    <CardContent>
-                        <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-                            {privacyData.k_anonymity.satisfies_k ? <CheckIcon color="success" /> : <ErrorIcon color="error" />}
-                            k-Anonymity (k={privacyData.k_anonymity.k_value})
-                        </Typography>
+            {/* k-Anonymity Section — multi-config aware */}
+            {(() => {
+                // Prefer the full configs array (multi-config mode).
+                // Fall back to the legacy single k_anonymity field.
+                const configs: any[] =
+                    privacyData.k_anonymity_configs?.length > 0
+                        ? privacyData.k_anonymity_configs
+                        : privacyData.k_anonymity
+                        ? [privacyData.k_anonymity]
+                        : [];
 
-                        <Box sx={{ mb: 2 }}>
-                            <Chip
-                                label={privacyData.k_anonymity.satisfies_k ? 'PASSED' : 'FAILED'}
-                                color={privacyData.k_anonymity.satisfies_k ? 'success' : 'error'}
-                                sx={{ mr: 2 }}
-                            />
-                            <Typography variant="body2" component="span" color="text.secondary">
-                                Ensures each combination of quasi-identifiers appears at least k times
+                if (configs.length === 0) return null;
+
+                const isMulti = configs.length > 1;
+
+                return (
+                    <>
+                        {isMulti && (
+                            <Typography variant="h6" sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                                k-Anonymity Configurations ({configs.length} configs)
                             </Typography>
-                        </Box>
-
-                        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2, mb: 2 }}>
-                            <Paper variant="outlined" sx={{ p: 2 }}>
-                                <Typography variant="caption" color="text.secondary">Required k</Typography>
-                                <Typography variant="h5">{privacyData.k_anonymity.k_value}</Typography>
-                            </Paper>
-                            <Paper variant="outlined" sx={{ p: 2 }}>
-                                <Typography variant="caption" color="text.secondary">Actual Min k</Typography>
-                                <Typography variant="h5" color={privacyData.k_anonymity.satisfies_k ? 'success.main' : 'error.main'}>
-                                    {privacyData.k_anonymity.actual_min_k}
-                                </Typography>
-                            </Paper>
-                            <Paper variant="outlined" sx={{ p: 2 }}>
-                                <Typography variant="caption" color="text.secondary">Violating Groups</Typography>
-                                <Typography variant="h5" color="error">
-                                    {privacyData.k_anonymity.violating_groups_count} / {privacyData.k_anonymity.total_groups}
-                                </Typography>
-                            </Paper>
-                        </Box>
-
-                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                            Quasi-identifiers checked:
-                        </Typography>
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
-                            {privacyData.k_anonymity.quasi_identifiers.map((qi: string) => (
-                                <Chip key={qi} label={qi} size="small" variant="outlined" />
-                            ))}
-                        </Box>
-
-                        {privacyData.k_anonymity.violating_groups.length > 0 && (
-                            <>
-                                <Divider sx={{ my: 2 }} />
-                                <Typography variant="subtitle2" color="error" sx={{ mb: 1 }}>
-                                    Sample Violating Groups (uniquely identifiable):
-                                </Typography>
-                                <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 400 }}>
-                                    <Table size="small">
-                                        <TableHead>
-                                            <TableRow>
-                                                {privacyData.k_anonymity.quasi_identifiers.map((qi: string) => (
-                                                    <TableCell key={qi}>{qi}</TableCell>
-                                                ))}
-                                                <TableCell>Count</TableCell>
-                                            </TableRow>
-                                        </TableHead>
-                                        <TableBody>
-                                            {privacyData.k_anonymity.violating_groups.slice(0, 10).map((group: any, idx: number) => (
-                                                <TableRow key={idx}>
-                                                    {privacyData.k_anonymity!.quasi_identifiers.map((qi: string) => (
-                                                        <TableCell key={qi}>{String(group[qi])}</TableCell>
-                                                    ))}
-                                                    <TableCell>
-                                                        <Chip label={group.count} size="small" color="error" />
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))}
-                                        </TableBody>
-                                    </Table>
-                                </TableContainer>
-                            </>
                         )}
-                    </CardContent>
-                </Card>
-            )}
+                        {configs.map((cfg: any, cfgIdx: number) => (
+                            <Card key={cfgIdx} sx={{ mb: 2, border: cfg.satisfies_k ? '1px solid #4caf50' : '1px solid #f44336' }}>
+                                <CardContent>
+                                    <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        {cfg.satisfies_k ? <CheckIcon color="success" /> : <ErrorIcon color="error" />}
+                                        {isMulti ? `Config ${cfgIdx + 1} — k-Anonymity (k=${cfg.k_value})` : `k-Anonymity (k=${cfg.k_value})`}
+                                    </Typography>
+
+                                    <Box sx={{ mb: 2 }}>
+                                        <Chip
+                                            label={cfg.satisfies_k ? 'PASSED' : 'FAILED'}
+                                            color={cfg.satisfies_k ? 'success' : 'error'}
+                                            sx={{ mr: 2 }}
+                                        />
+                                        <Typography variant="body2" component="span" color="text.secondary">
+                                            Ensures each combination of quasi-identifiers appears at least k times
+                                        </Typography>
+                                    </Box>
+
+                                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2, mb: 2 }}>
+                                        <Paper variant="outlined" sx={{ p: 2 }}>
+                                            <Typography variant="caption" color="text.secondary">Required k</Typography>
+                                            <Typography variant="h5">{cfg.k_value}</Typography>
+                                        </Paper>
+                                        <Paper variant="outlined" sx={{ p: 2 }}>
+                                            <Typography variant="caption" color="text.secondary">Actual Min k</Typography>
+                                            <Typography variant="h5" color={cfg.satisfies_k ? 'success.main' : 'error.main'}>
+                                                {cfg.actual_min_k}
+                                            </Typography>
+                                        </Paper>
+                                        <Paper variant="outlined" sx={{ p: 2 }}>
+                                            <Typography variant="caption" color="text.secondary">Violating Groups</Typography>
+                                            <Typography variant="h5" color={cfg.violating_groups_count > 0 ? 'error' : 'success.main'}>
+                                                {cfg.violating_groups_count} / {cfg.total_groups}
+                                            </Typography>
+                                        </Paper>
+                                    </Box>
+
+                                    <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                                        Quasi-identifiers checked:
+                                    </Typography>
+                                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                                        {cfg.quasi_identifiers.map((qi: string) => (
+                                            <Chip key={qi} label={qi} size="small" variant="outlined" />
+                                        ))}
+                                    </Box>
+
+                                    {cfg.violating_groups?.length > 0 && (
+                                        <>
+                                            <Divider sx={{ my: 2 }} />
+                                            <Typography variant="subtitle2" color="error" sx={{ mb: 1 }}>
+                                                Sample Violating Groups (uniquely identifiable):
+                                            </Typography>
+                                            <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 400 }}>
+                                                <Table size="small">
+                                                    <TableHead>
+                                                        <TableRow>
+                                                            {cfg.quasi_identifiers.map((qi: string) => (
+                                                                <TableCell key={qi}>{qi}</TableCell>
+                                                            ))}
+                                                            <TableCell>Count</TableCell>
+                                                        </TableRow>
+                                                    </TableHead>
+                                                    <TableBody>
+                                                        {cfg.violating_groups.slice(0, 10).map((group: any, idx: number) => (
+                                                            <TableRow key={idx}>
+                                                                {cfg.quasi_identifiers.map((qi: string) => (
+                                                                    <TableCell key={qi}>{String(group[qi])}</TableCell>
+                                                                ))}
+                                                                <TableCell>
+                                                                    <Chip label={group.count} size="small" color="error" />
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                            </TableContainer>
+                                        </>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        ))}
+                    </>
+                );
+            })()}
 
             {/* l-Diversity Section */}
             {privacyData.l_diversity && (
